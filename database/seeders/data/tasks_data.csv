@@ -1,0 +1,223 @@
+Root Task,Parent Task,Sub Parent Task,Child Task,Sub Child Task,Leaf Task,Volume,Unit,Price,Weight
+I. PEKERJAAN PERSIAPAN,,,,,Pengukuran dan pasang bouwplank,60.3,m',"78,900.00",0.48
+,,,,,Pembersihan lahan awal sampai akhir pekerjaan,908.3,m²,"18,750.00",1.70
+II. PEKERJAAN STRUKTUR,II.1 Pekerjaan Struktur Bawah,,,,Pekerjaan galian tanah pondasi footplat,70.78,m³,"70,180.00",0.50
+,,,,,Pekerjaan urugan tanah kembali pondasi footplat,18.59,m³,"46,750.00",0.09
+,,,,,Pekerjaan lantai kerja bawah pondasi footplat,2.32,m³,"735,328.00",0.17
+,,,,,Pekerjaan galian tanah pondasi batu belah,19.8,m³,"70,180.00",0.14
+,,,,,Pekerjaan lantai kerja bawah pondasi batu belah,4.65,m³,"735,328.00",0.34
+,,,,,Pekerjaan pondasi batu belah,27.9,m³,"654,079.58",1.83
+,,,,,Pekerjaan urugan tanah peninggian lantai termasuk pemadatan tanah,256,m³,"65,802.00",1.69
+,,Pekerjaan pondasi footplat tipe F1a,,,Pekerjaan beton K-225,5.76,m³,"772,596.00",0.45
+,,,,,Pekerjaan bekisting pondasi,7,m²,"87,929.63",0.06
+,,,,,Pekerjaan pembesian ulir,180.52,kg,"12,818.52",0.23
+,,,,,Pekerjaan pembesian polos,90.02,kg,"11,876.74",0.11
+,,Pekerjaan pondasi footplat tipe F1b,,,Pekerjaan beton K-225,4.55,m³,"772,596.00",0.35
+,,,,,Pekerjaan bekisting pondasi,9,m²,"87,929.63",0.08
+,,,,,Pekerjaan pembesian ulir,232.1,kg,"12,818.52",0.30
+,,,,,Pekerjaan pembesian polos,121.04,kg,"11,876.74",0.14
+,,Pekerjaan pondasi footplat tipe F1c,,,Pekerjaan beton K-225,0.79,m³,"772,596.00",0.06
+,,,,,Pekerjaan bekisting pondasi,2,m²,"87,929.63",0.02
+,,,,,Pekerjaan pembesian ulir,51.58,kg,"12,818.52",0.07
+,,,,,Pekerjaan pembesian polos,26.9,kg,"11,876.74",0.03
+,,Pekerjaan pondasi footplat tipe F2,,,Pekerjaan beton K-225,1.51,m³,"772,596.00",0.12
+,,,,,Pekerjaan bekisting pondasi,4.8,m²,"87,929.63",0.04
+,,,,,Pekerjaan pembesian ulir,103.14,kg,"12,818.52",0.13
+,,,,,Pekerjaan pembesian polos,51.84,kg,"11,876.74",0.06
+,,Pekerjaan kolom pedestal tipe K1a ukuran 25 x 30 cm,,,Pekerjaan beton K-225,0.42,m³,"772,596.00",0.03
+,,,,,Pekerjaan bekisting kolom,6.16,m²,"87,929.63",0.05
+,,,,,Pekerjaan pembesian ulir,84.02,kg,"12,818.52",0.11
+,,,,,Pekerjaan pembesian polos,33.01,kg,"11,876.74",0.04
+,,Pekerjaan kolom pedestal tipe K1b ukuran 25 x 30 cm,,,Pekerjaan beton K-225,2.77,m³,"772,596.00",0.21
+,,,,,Pekerjaan bekisting kolom,21.56,m²,"87,929.63",0.19
+,,,,,Pekerjaan pembesian ulir,294.06,kg,"12,818.52",0.38
+,,,,,Pekerjaan pembesian polos,230.01,kg,"11,876.74",0.27
+,,Pekerjaan kolom pedestal K2 ukuran 20 x 20 cm,,,Pekerjaan beton K-225,0.34,m³,"772,596.00",0.03
+,,,,,Pekerjaan bekisting kolom,6.72,m²,"87,929.63",0.06
+,,,,,Pekerjaan pembesian ulir,63.01,kg,"12,818.52",0.08
+,,,,,Pekerjaan pembesian polos,34.6,kg,"11,876.74",0.04
+,,Pekerjaan sloof 15 x 25 cm,,,Pekerjaan beton K-225,7.91,m³,"772,596.00",0.61
+,,,,,Pekerjaan bekisting sloof,77.5,m²,"87,929.63",0.68
+,,,,,Pekerjaan pembesian ulir,645.97,kg,"12,818.52",0.83
+,,,,,Pekerjaan pembesian polos,235.68,kg,"11,876.74",0.28
+,,,,,Pekerjaan wiremesh 1 layer M 8,457.26,m²,"30,000.00",1.37
+,,,,,Pekerjaan plat lantai dasar beton K-175 tebal 10 cm,52.73,m³,"746,641.50",3.94
+,II.2 Pekerjaan Struktur Atas,II.2.1 Pekerjaan Struktur Bangunan,Pekerjaan kolom tipe K1a ukuran 25 x 30 cm elv. +4.00,,Pekerjaan beton K-225,0.6,m³,"772,596.00",0.05
+,,,,,Pekerjaan bekisting kolom,8.8,m²,"87,929.63",0.08
+,,,,,Pekerjaan pembesian ulir,75.35,kg,"12,818.52",0.10
+,,,,,Pekerjaan pembesian polos,32.22,kg,"11,876.74",0.04
+,,,Pekerjaan kolom tipe K1a ukuran 25 x 30 cm elv. +2.00,,Pekerjaan beton K-225,0.3,m³,"772,596.00",0.02
+,,,,,Pekerjaan bekisting kolom,4.4,m²,"87,929.63",0.04
+,,,,,Pekerjaan pembesian ulir,42.01,kg,"12,818.52",0.05
+,,,,,Pekerjaan pembesian polos,16.51,kg,"11,876.74",0.02
+,,,Pekerjaan kolom tipe K1b ukuran 25 x 30 cm elv. +4.00,,Pekerjaan beton K-225,2.1,m³,"772,596.00",0.16
+,,,,,Pekerjaan bekisting kolom,30.8,m²,"87,929.63",0.27
+,,,,,Pekerjaan pembesian ulir,263.72,kg,"12,818.52",0.34
+,,,,,Pekerjaan pembesian polos,112.79,kg,"11,876.74",0.13
+,,,Pekerjaan kolom tipe K1b ukuran 25 x 30 cm elv. +2.00,,Pekerjaan beton K-225,1.05,m³,"772,596.00",0.08
+,,,,,Pekerjaan bekisting kolom,38.4,m²,"87,929.63",0.34
+,,,,,Pekerjaan pembesian ulir,147.03,kg,"12,818.52",0.19
+,,,,,Pekerjaan pembesian polos,137.77,kg,"11,876.74",0.16
+,,,Pekerjaan kolom tipe K2 ukuran 20 x 20 cm elv. +4.00,,Pekerjaan beton K-225,0.32,m³,"772,596.00",0.03
+,,,,,Pekerjaan bekisting kolom,6.4,m²,"87,929.63",0.06
+,,,,,Pekerjaan pembesian ulir,37.67,kg,"12,818.52",0.05
+,,,,,Pekerjaan pembesian polos,22.52,kg,"11,876.74",0.03
+,,,Pekerjaan kolom tipe K2 ukuran 20 x 20 cm elv. +3.20,,Pekerjaan beton K-225,0.13,m³,"772,596.00",0.01
+,,,,,Pekerjaan bekisting kolom,2.56,m²,"87,929.63",0.02
+,,,,,Pekerjaan pembesian ulir,15.5,kg,"12,818.52",0.02
+,,,,,Pekerjaan pembesian polos,9.06,kg,"11,876.74",0.01
+,,,Pekerjaan kolom tipe K2 ukuran 20 x 20 cm elv. +2.00,,Pekerjaan beton K-225,0.24,m³,"772,596.00",0.02
+,,,,,Pekerjaan bekisting kolom,4.8,m²,"87,929.63",0.04
+,,,,,Pekerjaan pembesian ulir,31.51,kg,"12,818.52",0.04
+,,,,,Pekerjaan pembesian polos,17.3,kg,"11,876.74",0.02
+,,,Pekerjaan kolom tipe Kp ukuran 12 x 12,,Pekerjaan beton K-225,2.3,m³,"772,596.00",0.18
+,,,,,Pekerjaan bekisting kolom,98.8,m²,"87,929.63",0.87
+,,,,,Pekerjaan pembesian ulir,434.02,kg,"12,818.52",0.56
+,,,,,Pekerjaan pembesian polos,166.16,kg,"11,876.74",0.20
+,,,Pekerjaan balok tipe RB ukuran 12 x 20 cm elv. +2.00,,Pekerjaan beton K-225,1.13,m³,"772,596.00",0.09
+,,,,,Pekerjaan bekisting balok,18.84,m²,"87,929.63",0.17
+,,,,,Pekerjaan pembesian ulir,123.3,kg,"12,818.52",0.16
+,,,,,Pekerjaan pembesian polos,71.27,kg,"11,876.74",0.09
+,,,Pekerjaan balok tipe RB ukuran 12 x 20 cm elv. +3.20,,Pekerjaan beton K-225,1.93,m³,"772,596.00",0.15
+,,,,,Pekerjaan bekisting balok,62.12,m²,"87,929.63",0.55
+,,,,,Pekerjaan pembesian ulir,201.72,kg,"12,818.52",0.26
+,,,,,Pekerjaan pembesian polos,119.28,kg,"11,876.74",0.14
+,,,Pekerjaan balok tipe RB ukuran 12 x 20 cm elv. +4.00,,Pekerjaan beton K-225,0.42,m³,"772,596.00",0.03
+,,,,,Pekerjaan bekisting balok,7.08,m²,"87,929.63",0.06
+,,,,,Pekerjaan pembesian ulir,44.39,kg,"12,818.52",0.06
+,,,,,Pekerjaan pembesian polos,26.65,kg,"11,876.74",0.03
+,,,Pekerjaan balok tipe RB ukuran 12 x 30 cm elv. +2.80,,Pekerjaan beton K-225,0.72,m³,"772,596.00",0.06
+,,,,,Pekerjaan bekisting balok,25.06,m²,"87,929.63",0.22
+,,,,,Pekerjaan pembesian ulir,51.79,kg,"12,818.52",0.07
+,,,,,Pekerjaan pembesian polos,40.95,kg,"11,876.74",0.05
+,,,Pekerjaan balok tipe RB ukuran 12 x 30 cm elv. +4.00,,Pekerjaan beton K-225,0.72,m³,"772,596.00",0.06
+,,,,,Pekerjaan bekisting balok,12.06,m²,"87,929.63",0.11
+,,,,,Pekerjaan pembesian ulir,51.79,kg,"12,818.52",0.07
+,,,,,Pekerjaan pembesian polos,40.95,kg,"11,876.74",0.05
+,,,Pekerjaan balok tipe RB ukuran 12 x 40 cm elv. +4.00,,Pekerjaan beton K-225,0.72,m³,"772,596.00",0.06
+,,,,,Pekerjaan bekisting balok,12,m²,"87,929.63",0.11
+,,,,,Pekerjaan pembesian ulir,55.49,kg,"12,818.52",0.07
+,,,,,Pekerjaan pembesian polos,38.78,kg,"11,876.74",0.05
+,,,"Pekerjaan plat beton lantai rooftank, t = 10 cm",,Pekerjaan beton K-225,0.48,m³,"772,596.00",0.04
+,,,,,Pekerjaan bekisting lantai,4.79,m²,"87,929.63",0.04
+,,,,,Pekerjaan pembesian polos,52.9,kg,"11,876.74",0.06
+,,,Pekerjaan Struktur Baja,Pekerjaan kolom baja tipe K1.a,"Pekerjaan rangka baja double C 200.75.50.3,2, termasuk :",155.74,kg,"21,000.00",0.33
+,,,,,"Asesoris mur baut, angkur, base plate, stifner pengelasan dll, sesuai dengan gambar",15.57,kg,"21,000.00",0.03
+,,,,,Pekerjaan perakitan baja profil,171.31,kg,"2,000.00",0.03
+,,,,,Pekerjaan finishing cat anti karat,5.88,m²,"30,000.00",0.02
+,,,,Pekerjaan kolom baja tipe K1.b,"Pekerjaan rangka baja double C 200.75.50.3,2, termasuk :",545.08,kg,"21,000.00",1.15
+,,,,,"Asesoris mur baut, angkur, base plate, stifner pengelasan dll, sesuai dengan gambar",54.51,kg,"21,000.00",0.11
+,,,,,Pekerjaan perakitan baja profil,599.58,kg,"2,000.00",0.12
+,,,,,Pekerjaan finishing cat anti karat,20.58,m²,"30,000.00",0.06
+,,,,Pekerjaan kolom baja tipe K2,"Pekerjaan rangka baja double C 150.50.20.3,2 termasuk :",330.75,kg,"21,000.00",0.70
+,,,,,"Asesoris mur baut, angkur, base plate, stifner pengelasan dll, sesuai dengan gambar",33.08,kg,"21,000.00",0.07
+,,,,,Pekerjaan perakitan baja profil,363.83,kg,"2,000.00",0.07
+,,,,,Pekerjaan finishing cat anti karat,12.22,m²,"30,000.00",0.04
+,,II.2.2 Pekerjaan Struktur Rangka Atap,Pekerjaan kuda - kuda tipe KK-1,,"Pekerjaan rangka hollow 40.40.2,3 termasuk :",545.07,kg,"21,000.00",1.15
+,,,,,"Asesoris, pengelasan, dll, sesuai dengan gambar",54.51,kg,"21,000.00",0.11
+,,,,,Pekerjaan perakitan,599.58,kg,"2,000.00",0.12
+,,,,,Pekerjaan finishing cat anti karat,294.62,m²,"30,000.00",0.88
+,,,Pekerjaan kuda - kuda tipe KK-2,,"Pekerjaan rangka hollow 40.40.2,3 termasuk :","1,907.75",kg,"21,000.00",4.01
+,,,,,"Asesoris, pengelasan, dll, sesuai dengan gambar",190.78,kg,"21,000.00",0.40
+,,,,,Pekerjaan perakitan,"2,098.53",kg,"2,000.00",0.42
+,,,,,Pekerjaan finishing cat anti karat,"1,031.18",m²,"30,000.00",3.09
+,,,Pekerjaan kuda - kuda tipe BRC-1,,"Pekerjaan rangka hollow 40.40.2,3 termasuk :",937.69,kg,"21,000.00",1.97
+,,,,,"Asesoris, pengelasan, dll, sesuai dengan gambar",93.77,kg,"21,000.00",0.20
+,,,,,Pekerjaan perakitan,"1,031.46",kg,"2,000.00",0.21
+,,,,,Pekerjaan finishing cat anti karat,535.82,m²,"30,000.00",1.61
+,,,Pekerjaan kuda - kuda tipe BRC-2,,Pekerjaan rangka double baja siku 40.40.4 dan tulangan ulir termasuk :,404.73,kg,"21,000.00",0.85
+,,,,,"Asesoris mur baut, angkur, stifner pengelasan dll, sesuai dengan gambar",40.47,kg,"21,000.00",0.09
+,,,,,Pekerjaan perakitan,445.21,kg,"2,000.00",0.09
+,,,,,Pekerjaan finishing cat anti karat,74.77,m²,"30,000.00",0.22
+,,,Pekerjaan gording,,"Pekerjaan baja canal C 100.50.20.2,3 termasuk :","2,849.31",kg,"21,000.00",5.98
+,,,,,"Asesories mur baut, siku gording, jarum gording, ikat angin, pengelasan, dll terpasang sesuai dengan gambar",284.93,kg,"21,000.00",0.60
+,,,,,Pekerjaan perakitan,"3,134.24",kg,"2,000.00",0.63
+,,,,,Pengecatan cat meni besi anti karat,280.72,m²,"30,000.00",0.84
+,,,Pekerjaan Struktur Rangka Kanopi,Pekerjaan kuda - kuda baja tipe RK-1,"Pekerjaan rangka hollow 40.40.2,3 termasuk :",60.48,kg,"21,000.00",0.13
+,,,,,"Asesoris, pengelasan, dll, sesuai dengan gambar",6.05,kg,"21,000.00",0.01
+,,,,,Pekerjaan perakitan,66.53,kg,"2,000.00",0.01
+,,,,,Pekerjaan finishing cat anti karat,17.28,m²,"30,000.00",0.05
+,,,,Pekerjaan kuda - kuda tipe BRC-3,"Pekerjaan rangka hollow 40.40.2,3 termasuk :",84.36,kg,"21,000.00",0.18
+,,,,,"Asesoris, pengelasan, dll, sesuai dengan gambar",8.44,kg,"21,000.00",0.02
+,,,,,Pekerjaan perakitan,92.8,kg,"2,000.00",0.02
+,,,,,Pengecatan cat meni besi anti karat,48.21,m²,"30,000.00",0.15
+,,,,Pekerjaan gording,"Pekerjaan baja canal C 100.50.20.2,3 termasuk :",366.98,kg,"21,000.00",0.77
+,,,,,"Asesories mur baut, siku gording, jarum gording, ikat angin, pengelasan, dll terpasang sesuai dengan gambar",36.7,kg,"21,000.00",0.08
+,,,,,Pekerjaan perakitan,403.68,kg,"2,000.00",0.08
+,,,,,Pengecatan cat meni besi anti karat,36.16,m²,"30,000.00",0.11
+III. PEKERJAAN ARSITEKTUR,III.1 Pekerjaan Arsitektur Bangunan,III.1.1 Pekerjaan Pasangan,,,Pekerjaan pasangan dinding bata merah,344.36,m²,"85,853.72",2.96
+,,,,,Pekerjaan plesteran dinding,676.31,m²,"37,482.37",2.54
+,,,,,Pekerjaan acian dinding,607.58,m²,"31,077.75",1.89
+,,,,,Pekerjaan sponengan dinding,119.48,m',"10,000.00",0.12
+,,,,,Pekerjaan dinding Partisi Gypsum 2 muka,11.2,m²,"250,000.00",0.28
+,,III.1.2 Pekerjaan Penutup Lantai dan Dinding,Pekerjaan Penutup Lantai & Dinding,,Pekerjaan penutup lantai keramik uk. 30 x 30 cm polished,130.04,m²,"90,000.00",1.17
+,,,,,Pekerjaan penutup lantai keramik uk. 30 x 30 cm unpolished,33.79,m²,"100,000.00",0.34
+,,,,,Pekerjaan penutup dinding keramik uk. 30 x 30 cm polished,14.92,m²,"100,000.00",0.15
+,,,,,Pekerjaan finishing floor hardener 5 kg lantai warehouse,457.26,m²,"40,000.00",1.83
+,,,,,Pekerjaan rabat beton tebal 10 cm,4.95,m³,"735,328.00",0.36
+,,III.1.3 Pekerjaan Penutup Langit - Langit,,,"Pekerjaan plafond gypsumboard, t = 9 mm rangka hollow galvalum",192.94,m²,"110,000.00",2.12
+,,,,,"Pekerjaan plafond kalsiboard, t = 6 mm rangka hollow galvalum",9.74,m²,"110,000.00",0.11
+,,III.1.4 Pekerjaan Finishing Cat,,,Pekerjaan finishing cat interior,606.05,m²,"20,000.00",1.21
+,,,,,Pekerjaan finishing cat eksterior,184.2,m²,"25,000.00",0.46
+,,"III.1.5 Pekerjaan Kusen - Pekerjaan kosen, daun pintu / jendela dan hardware asesoriesnya terpasang sesuai gambar :",Pekerjaan kusen tipe P1 (3 bh),,Pekerjaan pintu single Ruko,3,unit,"2,706,807.13",0.81
+,,,,,Pekerjaan daun pintu,,,,
+,,,,,Pekerjaan handel pintu + kunci ex paloma,,,,
+,,,,,Pekerjaan engsel pintu,,,,
+,,,Pekerjaan kusen tipe P2 (3 bh) pintu toilet,,Pekerjaan pintu PVC,3,unit,"704,135.72",0.21
+,,,Pekerjaan kusen tipe FD (6 bh),,"Pekerjaan pintu folding gate ukuran 3,00 x 2,50 meter",7,unit,"1,958,550.00",1.37
+,,,,,"finishing cat besi termasuk rangka,asesoris dll terpasang sesuai dengan gambar",,,,
+,,,Pekerjaan kusen tipe FD (1 bh),,"Pekerjaan pintu folding door besi ukuran 3,50 x 4,0 meter finishing cat besi termasuk rangka,asesoris dll terpasang sesuai dengan gambar",1,unit,"3,655,960.00",0.37
+,,,,,"Pekerjaan Pintu Besi 1,20 x 2,40 meter",1,unit,"1,564,657.78",0.16
+,,,,,"Pekerjaan Pagar Kawat 3,50 x 1,50 meter",1,unit,"2,977,994.25",0.30
+,,,,,Pekerjaan Dinding Partisi Kaca,4,unit,"2,439,538.06",0.98
+,,,,,Pekerjaan Pintu Kaca Frameles,2,unit,"8,000,000.00",1.60
+,,,,,Pekerjaan Pagar Kawat + Pintu Kawat,1,unit,"4,000,000.00",0.40
+,,III.1.6 Pekerjaan Sanitair,,,Pekerjaan pasangan closet jongkok,2,unit,"304,117.00",0.06
+,,,,,Pekerjaan pasangan kran dinding,2,unit,"99,543.54",0.02
+,,,,,Pekerjaan pasangan Closet duduk + Jet washer,1,unit,"1,437,590.00",0.14
+,,,,,Pekerjaan Wastafel,1,unit,"1,147,138.08",0.12
+,,,,,Pekerjaan pasangan floor drain,3,unit,"35,000.00",0.01
+,III.2 Pekerjaan Penutup Atap,III.2.1 Pekerjaan Penutup Atap Utama,,,"Pekerjaan penutup atap Spandek t : 0,35 mm",795.44,m²,"80,000.00",6.36
+,,,,,"Pekerjaan nok Spandek t : 0,35 mm",32,m',"120,000.00",0.38
+,,,,,"Pekerjaan lisplank galvalum coating warna, t = 0.35 TCT - AZ100",55.44,m²,"100,000.00",0.55
+,,,,,"Pekerjaan talang galvalum, t = 0.3 mm AZ-100 termasuk rangka",110.88,m',"148,232.72",1.64
+,,,,,"L 50 x 50 x 5 jarak 0.5 m, asesoris dll terpasang sesuai dengan gambar",,,,
+,,III.2.2 Pekerjaan Penutup Atap Kanopi,,,"Pekerjaan penutup atap Spandek t : 0,35 mm",60.2,m²,"80,000.00",0.48
+,,,,,"Pekerjaan lisplank galvalum coating warna, t = 0.35 TCT - AZ100",21.56,m²,"100,000.00",0.22
+,,III.3 Pekerjaan Facade,,,"Pekerjaan penutup dinding cladding bahan Spandek t : 0,35 mm termasuk rangka, asesoris dll terpasang sesuai dengan gambar",310.98,m²,"80,000.00",2.49
+,,,,,Pekerjaan ventilasi ruangan warehouse (kawat nyamuk),23.54,m²,"200,000.00",0.47
+,,,,,"Pekerjaan signage ""KOPERASI DESA MERAH PUTIH"" termasuk asesoris dll terpasang sesuai dengan gambar",1,set,"5,000,000.00",0.50
+,,III.4 Pekerjaan Infrastruktur,,,Pekerjaan hamparan sirtu tebal 5 cm,15.1,m³,"220,149.60",0.33
+,,,,,Pekerjaan saluran keliling,88,m',"121,951.08",1.07
+IV. PEKERJAAN MEKANIKAL,PEKERJAAN MEKANIKAL,"IV.I. Instalasi Air Bersih - Pekerjaan pemipaan air bersih dengan bahan polypropylene PP-R PN, lengkap terpasang dengan gantungan, galian, urugan, bobokan dan aksesorisnya, Produk. Pipamas (termasuk Tes dan Komisioning)",,Lantai 01,"Pipa PVC klas AW dia. 1/2""",12,m',"44,572.41",0.05
+,,,,,"Pipa PVC klas AW dia. 3/4""",5,m',"49,074.16",0.03
+,,,,,"Pipa PVC klas AW dia. 1"" ( Dari sumber air bersih ke rooftank )",10,m',"54,614.04",0.06
+,,,,,"Pipa PVC klas AW dia. 1""",6,m',"54,614.04",0.03
+,,,,Lantai 02,"Pipa PVC klas AW dia. 1""",8,m',"54,614.04",0.04
+,,,,,"Roofank Penguin Kapasitas 1 m3, c/w dudukan, floating valve dan aksesorisnya",1,m',"3,500,000.00",0.35
+,,,,,"Gate Valve PN 10 dia. 1""",2,bh,"27,929.00",0.01
+,,"IV.II. Instalasi Air Kotor dan Air Bekas - Pekerjaan pemipaan air kotor, air bekas dan vent dengan bahan PVC - AW klas 10K, lengkap terpasang dengan gantungan, galian, urugan, bobokan dan aksesorisnya, Produk. Pipamas (termasuk Tes dan Komisioning)",,Lantai 01,"Pipa PVC klas AW dia. 2""",10,m',"76,928.23",0.08
+,,,,,"Pipa PVC klas AW dia. 3""",32,m',"100,251.66",0.32
+,,,,,"Pipa PVC klas AW dia. 4""",23,m',"125,026.04",0.29
+,,,,,"Septictank kapasitas 2 m3 c/w setting, leveling, galian tanah, dudukan beton, finishing",1,unit,"5,000,000.00",0.50
+,,"IV.III. Instalasi Pipa Pembuangan Air Hujan - Pekerjaan pemipaan pembuangan air hujan dengan bahan PVC - AW klas 10K, lengkap terpasang dengan gantungan, galian, urugan, bobokan dan aksesorisnya, Produk. Pipamas",,,"Pipa PVC klas AW dia. 4""",78,m',"125,026.04",0.98
+,,,,,Roof drain dia. 4'',10,unit,"50,000.00",0.05
+V. PEKERJAAN ELEKTRIKAL,PEKERJAAN ELEKTRIKAL,V.1 Pekerjaan Distribusi listrik,,,Sambung Daya PLN 16.500 VA,1,ls,"15,988,500.00",1.93
+,,,,,Uang jaminan langganan,1,ls,"2,838,000.00",
+,,,,,Biaya administrasi (Legalitas dan Pengurusan),1,ls,"495,000.00",
+,,,,,Sertifikat Laik Operasi (SLO),1,,,
+,,,,,Kabel NYY 4x6 mm²+Kabel BC 6 mm Dari KWH meter,7,m',"89,090.54",0.06
+,,,,,"Fort Box MCB 1 pc, mcb 25 A 1 pc",1,LS,"2,629,111.81",0.26
+,,"V.2 Pekerjaan Instalasi Penerangan Dan Kotak-Kontak - Instalasi dan pengadaan unit Armature & Lampu lengkap terpasang dengan bracket, gantungan, bobokan, dudukan dan accessoriesnya (termasuk Testing dan Commissioning)",,Lantai semibasment,Instalasi Penerangan dg Kabel NYM 3 X 2.5 mm dlm Pipa Conduit dia. 20 mm,56,titik,"326,440.95",1.83
+,,,,,Instalasi Kotak-Kontak dg Kabel NYM 3 X 2.5 mm dlm Pipa Conduit dia. 20 mm,13,titik,"346,570.95",0.45
+,,,,,LED DownLight panel 5 W,5,bh,"64,625.00",0.03
+,,,,,KAP GANTUNG MENGKILAP led BLUBE 50 W,23,bh,"226,380.00",0.52
+,,,,,"Armature bambu, lampu Master LED tube 1x20 W c/w Reflector",15,bh,"208,794.50",0.31
+,,,,,Saklar Tunggal,2,bh,"83,728.33",0.02
+,,,,,Saklar Ganda,11,bh,"94,315.83",0.10
+,,V.3 Pekerjaan Proteksi Petir,,,Splitzen As Tembaga / Penangkal Petir 30 cm,3,unit,"300,000.00",0.09
+,,,,,Down conductor Kabel NYY 1X70 mm,10,m,"243,625.00",0.24
+,,,,,BC 70 mm ring grounding,30,m,"82,500.00",0.25
+,,,,,Sumuran grounding tahanan max 3 ohm,1,unit,"9,942,955.00",0.99
+,,,,,Tiang penyangga penangkal petir 1 meter,3,unit,"150,000.00",0.05
+,,,,,Perijinan,1,lot,"2,679,770.00",0.27
