@@ -4,6 +4,7 @@ namespace App\Models;
 
 // use Illuminate\Contracts\Auth\MustVerifyEmail;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Illuminate\Support\Str;
@@ -23,6 +24,8 @@ class User extends Authenticatable
         'name',
         'email',
         'nrp',
+        'phone',
+        'office_id',
         'password',
         'is_approved',
         'approved_at',
@@ -93,5 +96,15 @@ class User extends Authenticatable
     public function isPending(): bool
     {
         return ! $this->is_approved;
+    }
+
+    /**
+     * Get the office that the user belongs to.
+     *
+     * @return BelongsTo<Office, $this>
+     */
+    public function office(): BelongsTo
+    {
+        return $this->belongsTo(Office::class);
     }
 }

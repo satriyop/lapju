@@ -12,7 +12,8 @@ class Project extends Model
     protected $fillable = [
         'name',
         'description',
-        'customer_id',
+        'partner_id',
+        'office_id',
         'location_id',
         'start_date',
         'end_date',
@@ -27,14 +28,19 @@ class Project extends Model
         ];
     }
 
-    public function customer(): \Illuminate\Database\Eloquent\Relations\BelongsTo
+    public function partner(): \Illuminate\Database\Eloquent\Relations\BelongsTo
     {
-        return $this->belongsTo(Customer::class);
+        return $this->belongsTo(Partner::class);
     }
 
     public function location(): \Illuminate\Database\Eloquent\Relations\BelongsTo
     {
         return $this->belongsTo(Location::class);
+    }
+
+    public function office(): \Illuminate\Database\Eloquent\Relations\BelongsTo
+    {
+        return $this->belongsTo(Office::class);
     }
 
     public function taskProgress(): \Illuminate\Database\Eloquent\Relations\HasMany

@@ -1,15 +1,100 @@
-<x-layouts.auth>
-    <div class="flex flex-col gap-6">
-        <x-auth-header :title="__('Create an account')" :description="__('Enter your details below to create your account')" />
+<?php
 
-        <!-- Session Status -->
-        <x-auth-session-status class="text-center" :status="session('status')" />
+use App\Models\Office;
+use App\Models\OfficeLevel;
+use Livewire\Volt\Component;
 
-        <form method="POST" action="{{ route('register.store') }}" class="flex flex-col gap-6">
-            @csrf
+new class extends Component
+{
+    public string $name = '';
+
+    public string $email = '';
+
+    public string $nrp = '';
+
+    public string $phone = '';
+
+    public ?int $kodimId = null;
+
+    public ?int $officeId = null;
+
+    public string $password = '';
+
+    public string $password_confirmation = '';
+
+    public function updatedKodimId(): void
+    {
+        // Reset office_id when kodim changes
+        $this->officeId = null;
+    }
+
+    public function register(): void
+    {
+        $this->validate([
+            'name' => ['required', 'string', 'max:255'],
+            'email' => ['required', 'string', 'email', 'max:255', 'unique:users,email'],
+            'nrp' => ['required', 'string', 'max:50', 'unique:users,nrp'],
+            'phone' => ['required', 'string', 'max:20', 'regex:/^[0-9\+\-\s\(\)]+$/'],
+            'kodimId' => ['required', 'integer', 'exists:offices,id'],
+            'officeId' => ['required', 'integer', 'exists:offices,id'],
+            'password' => ['required', 'string', 'min:8', 'confirmed'],
+        ]);
+
+        // Verify the selected office belongs to the selected kodim
+        $office = Office::find($this->officeId);
+        if (! $office || $office->parent_id !== $this->kodimId) {
+            $this->addError('officeId', 'Invalid office selection.');
+
+            return;
+        }
+
+        // Create user via Fortify action
+        app(\Laravel\Fortify\Contracts\CreatesNewUsers::class)->create([
+            'name' => $this->name,
+            'email' => $this->email,
+            'nrp' => $this->nrp,
+            'phone' => $this->phone,
+            'office_id' => $this->officeId,
+            'password' => $this->password,
+            'password_confirmation' => $this->password_confirmation,
+        ]);
+
+        // Redirect to login with pending message
+        session()->flash('status', __('Your account has been created and is pending approval. You will be notified once approved.'));
+
+        $this->redirect(route('login'), navigate: true);
+    }
+
+    public function with(): array
+    {
+        // Get Kodim level (level 3)
+        $kodimLevel = OfficeLevel::where('level', 3)->first();
+        $kodims = $kodimLevel
+            ? Office::where('level_id', $kodimLevel->id)->orderBy('name')->get()
+            : collect();
+
+        // Get Koramil for selected Kodim
+        $koramils = $this->kodimId
+            ? Office::where('parent_id', $this->kodimId)->orderBy('name')->get()
+            : collect();
+
+        return [
+            'kodims' => $kodims,
+            'koramils' => $koramils,
+        ];
+    }
+}; ?>
+
+<div class="flex flex-col gap-6">
+    <x-auth-header :title="__('Create an account')" :description="__('Enter your details below to create your account')" />
+
+    <!-- Session Status -->
+    <x-auth-session-status class="text-center" :status="session('status')" />
+
+    <form wire:submit="register" class="flex flex-col gap-6">
             <!-- Name -->
             <flux:input
-                name="name"
+                wire:model="name"
                 :label="__('Name')"
                 type="text"
                 required
@@ -17,30 +102,89 @@
                 autocomplete="name"
                 :placeholder="__('Full name')"
             />
+            @error('name')
+                <div class="-mt-4 text-sm text-red-600">{{ $message }}</div>
+            @enderror
 
             <!-- Email Address -->
             <flux:input
-                name="email"
+                wire:model="email"
                 :label="__('Email address')"
                 type="email"
                 required
                 autocomplete="email"
                 placeholder="email@example.com"
             />
+            @error('email')
+                <div class="-mt-4 text-sm text-red-600">{{ $message }}</div>
+            @enderror
 
             <!-- NRP (Army Employee ID) -->
             <flux:input
-                name="nrp"
+                wire:model="nrp"
                 :label="__('NRP (Employee ID)')"
                 type="text"
                 required
                 autocomplete="off"
                 :placeholder="__('Enter your NRP')"
             />
+            @error('nrp')
+                <div class="-mt-4 text-sm text-red-600">{{ $message }}</div>
+            @enderror
+
+            <!-- Phone Number -->
+            <flux:input
+                wire:model="phone"
+                :label="__('Mobile Phone Number')"
+                type="tel"
+                required
+                autocomplete="tel"
+                placeholder="08123456789"
+            />
+            @error('phone')
+                <div class="-mt-4 text-sm text-red-600">{{ $message }}</div>
+            @enderror
+
+            <!-- Kodim Selection -->
+            <flux:select
+                wire:model.live="kodimId"
+                :label="__('Kodim (District)')"
+                required
+            >
+                <flux:select.option value="">{{ __('Select Kodim first') }}</flux:select.option>
+                @foreach ($kodims as $kodim)
+                    <flux:select.option value="{{ $kodim->id }}">
+                        {{ $kodim->name }}
+                    </flux:select.option>
+                @endforeach
+            </flux:select>
+            @error('kodimId')
+                <div class="-mt-4 text-sm text-red-600">{{ $message }}</div>
+            @enderror
+
+            <!-- Koramil Selection (depends on Kodim) -->
+            <flux:select
+                wire:model="officeId"
+                :label="__('Koramil (Office)')"
+                required
+                :disabled="!$kodimId"
+            >
+                <flux:select.option value="">
+                    {{ $kodimId ? __('Select your Koramil') : __('Select Kodim first') }}
+                </flux:select.option>
+                @foreach ($koramils as $koramil)
+                    <flux:select.option value="{{ $koramil->id }}">
+                        {{ $koramil->name }}
+                    </flux:select.option>
+                @endforeach
+            </flux:select>
+            @error('officeId')
+                <div class="-mt-4 text-sm text-red-600">{{ $message }}</div>
+            @enderror
 
             <!-- Password -->
             <flux:input
-                name="password"
+                wire:model="password"
                 :label="__('Password')"
                 type="password"
                 required
@@ -48,10 +192,13 @@
                 :placeholder="__('Password')"
                 viewable
             />
+            @error('password')
+                <div class="-mt-4 text-sm text-red-600">{{ $message }}</div>
+            @enderror
 
             <!-- Confirm Password -->
             <flux:input
-                name="password_confirmation"
+                wire:model="password_confirmation"
                 :label="__('Confirm password')"
                 type="password"
                 required
@@ -61,15 +208,15 @@
             />
 
             <div class="flex items-center justify-end">
-                <flux:button type="submit" variant="primary" class="w-full" data-test="register-user-button">
-                    {{ __('Create account') }}
+                <flux:button type="submit" variant="primary" class="w-full" wire:loading.attr="disabled">
+                    <span wire:loading.remove>{{ __('Create account') }}</span>
+                    <span wire:loading>{{ __('Creating...') }}</span>
                 </flux:button>
             </div>
         </form>
 
-        <div class="space-x-1 rtl:space-x-reverse text-center text-sm text-zinc-600 dark:text-zinc-400">
-            <span>{{ __('Already have an account?') }}</span>
-            <flux:link :href="route('login')" wire:navigate>{{ __('Log in') }}</flux:link>
-        </div>
+    <div class="space-x-1 rtl:space-x-reverse text-center text-sm text-zinc-600 dark:text-zinc-400">
+        <span>{{ __('Already have an account?') }}</span>
+        <flux:link :href="route('login')" wire:navigate>{{ __('Log in') }}</flux:link>
     </div>
-</x-layouts.auth>
+</div>

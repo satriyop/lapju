@@ -23,8 +23,9 @@ class DatabaseSeeder extends Seeder
         $this->call([
             TaskSeeder::class,
             LocationSeeder::class,
-            CustomerSeeder::class,
+            PartnerSeeder::class,
             ProjectSeeder::class,
+            ProgressSeeder::class,
         ]);
     }
 }

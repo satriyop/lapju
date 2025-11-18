@@ -233,7 +233,7 @@ new class extends Component
 
     public function with(): array
     {
-        $projects = Project::with('location', 'customer')->orderBy('name')->get();
+        $projects = Project::with('location', 'partner')->orderBy('name')->get();
         $rootTasks = Task::whereNull('parent_id')->orderBy('_lft')->get();
 
         $allTasks = Task::with(['parent:id,name', 'children:id,parent_id'])
@@ -274,7 +274,7 @@ new class extends Component
                     <option value="">Select Project...</option>
                     @foreach($projects as $project)
                         <option value="{{ $project->id }}">
-                            {{ $project->location->city_name }} - {{ Str::limit($project->customer->name, 30) }}
+                            {{ $project->location->city_name }} - {{ Str::limit($project->partner->name, 30) }}
                         </option>
                     @endforeach
                 </flux:select>

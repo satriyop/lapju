@@ -2,10 +2,11 @@
 
 namespace Database\Seeders;
 
-use App\Models\Customer;
 use App\Models\Location;
+use App\Models\Office;
+use App\Models\OfficeLevel;
+use App\Models\Partner;
 use App\Models\Project;
-use Illuminate\Database\Console\Seeds\WithoutModelEvents;
 use Illuminate\Database\Seeder;
 
 class ProjectSeeder extends Seeder
@@ -15,29 +16,39 @@ class ProjectSeeder extends Seeder
      */
     public function run(): void
     {
-        // Create 15 projects using existing customers and locations
-        $customers = Customer::all();
+        // Create projects using existing partners, locations, and offices
+        $partners = Partner::all();
         $locations = Location::all();
 
-        // Create projects with pattern "PEMBANGUNAN KOPERASI MERAH PUTIH {CUSTOMER NAME}"
-        foreach ($customers as $customer) {
-            // Create 1-2 projects per customer
+        // Get Koramil offices (leaf level - level 4)
+        $koramilLevel = OfficeLevel::where('level', 4)->first();
+        $koramils = Office::where('level_id', $koramilLevel->id)->get();
+
+        if ($koramils->isEmpty()) {
+            $this->command->warn('No Koramil offices found! Please run OfficeSeeder first.');
+
+            return;
+        }
+
+        // Create projects with pattern "PEMBANGUNAN KOPERASI MERAH PUTIH {PARTNER NAME}"
+        foreach ($partners as $partner) {
+            // Create 1-2 projects per partner
             $projectCount = rand(1, 2);
 
             for ($i = 0; $i < $projectCount; $i++) {
-                $startDate = fake()->dateTimeBetween('-1 year', '+1 month');
-                $endDate = fake()->dateTimeBetween($startDate, '+2 years');
-
                 Project::create([
-                    'name' => 'PEMBANGUNAN KOPERASI MERAH PUTIH ' . $customer->name,
+                    'name' => 'PEMBANGUNAN KOPERASI MERAH PUTIH '.$partner->name,
                     'description' => 'Proyek pembangunan gedung koperasi untuk meningkatkan kesejahteraan masyarakat melalui ekonomi kerakyatan',
-                    'customer_id' => $customer->id,
+                    'partner_id' => $partner->id,
+                    'office_id' => $koramils->random()->id,
                     'location_id' => $locations->random()->id,
-                    'start_date' => $startDate,
-                    'end_date' => $endDate,
+                    'start_date' => '2025-11-01',
+                    'end_date' => '2026-01-31',
                     'status' => fake()->randomElement(['planning', 'active', 'completed', 'on_hold']),
                 ]);
             }
         }
+
+        $this->command->info('Created '.Project::count().' projects with office assignments.');
     }
 }

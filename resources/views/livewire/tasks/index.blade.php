@@ -63,7 +63,7 @@ new class extends Component
     public function with(): array
     {
         // Get all projects for the selector
-        $projects = Project::with('location', 'customer')->orderBy('name')->get();
+        $projects = Project::with('location', 'partner')->orderBy('name')->get();
 
         // Get all tasks that can be parents (exclude current task if editing)
         $parentTasks = Task::query()

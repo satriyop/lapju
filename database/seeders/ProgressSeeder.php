@@ -4,182 +4,207 @@ namespace Database\Seeders;
 
 use App\Models\Project;
 use App\Models\Task;
+use App\Models\TaskProgress;
 use App\Models\User;
 use Carbon\Carbon;
 use Illuminate\Database\Seeder;
-use Illuminate\Support\Facades\DB;
 
 class ProgressSeeder extends Seeder
 {
     /**
-     * Seed progress data for all projects.
+     * Seed progress data for PT Agrinas project.
+     * Uses project's actual start and end dates with realistic S-curve pattern.
      */
     public function run(): void
     {
-        $this->command->info('Seeding progress data...');
+        // Find PT Agrinas project
+        $project = Project::whereHas('partner', fn ($q) => $q->where('name', 'like', '%AGRINAS%'))->first();
 
-        // Clear existing progress data
-        DB::table('task_progress')->truncate();
-
-        $projects = Project::all();
-        $leafTasks = Task::whereDoesntHave('children')->get();
-        $user = User::first();
-
-        if ($projects->isEmpty()) {
-            $this->command->error('No projects found.');
+        if (! $project) {
+            $this->command->error('PT Agrinas project not found!');
 
             return;
         }
+
+        // Validate project has dates set
+        if (! $project->start_date || ! $project->end_date) {
+            $this->command->error('Project does not have start_date and end_date set!');
+
+            return;
+        }
+
+        // Get or create a user for the progress entries
+        $user = User::first();
+        if (! $user) {
+            $this->command->error('No user found in database!');
+
+            return;
+        }
+
+        // Get all leaf tasks (tasks without children)
+        $leafTasks = Task::whereNotIn('id', function ($query) {
+            $query->select('parent_id')
+                ->from('tasks')
+                ->whereNotNull('parent_id')
+                ->distinct();
+        })->orderBy('_lft')->get();
 
         if ($leafTasks->isEmpty()) {
-            $this->command->error('No leaf tasks found.');
+            $this->command->error('No leaf tasks found!');
 
             return;
         }
 
-        if (! $user) {
-            $this->command->error('No user found.');
+        $this->command->info("Found {$leafTasks->count()} leaf tasks to seed progress for.");
 
-            return;
-        }
+        // Clear existing progress for this project
+        TaskProgress::where('project_id', $project->id)->delete();
+        $this->command->info('Cleared existing progress data for this project.');
 
-        $this->command->info("Found {$projects->count()} projects and {$leafTasks->count()} leaf tasks.");
+        // Use project's actual start and end dates
+        $startDate = Carbon::parse($project->start_date);
+        $endDate = Carbon::parse($project->end_date);
 
-        $totalProgress = 0;
+        // Generate weekly progress entries (to avoid too many records)
+        $currentDate = $startDate->copy();
+        $totalDays = $startDate->diffInDays($endDate);
+        $progressEntries = [];
 
-        foreach ($projects as $project) {
-            $progressCount = $this->seedProjectProgress($project, $leafTasks, $user);
-            $totalProgress += $progressCount;
-            $this->command->info("Project '{$project->name}': {$progressCount} progress entries");
-        }
+        $this->command->info("Project: {$project->name}");
+        $this->command->info("Generating progress from {$startDate->format('Y-m-d')} to {$endDate->format('Y-m-d')} ({$totalDays} days)");
 
-        $this->command->info("Total progress entries created: {$totalProgress}");
-        $this->command->info('Done!');
-    }
+        // Calculate S-curve percentages for each task based on their position
+        $taskCount = $leafTasks->count();
 
-    private function seedProjectProgress(Project $project, $leafTasks, User $user): int
-    {
-        $projectStart = Carbon::parse($project->start_date);
-        $projectEnd = Carbon::parse($project->end_date);
-        $today = now();
+        while ($currentDate <= $endDate) {
+            $daysPassed = $startDate->diffInDays($currentDate);
+            $timeProgress = $daysPassed / max($totalDays, 1); // 0 to 1
 
-        // Only seed progress up to today or project end date
-        $effectiveEndDate = $projectEnd->lessThan($today) ? $projectEnd : $today;
+            foreach ($leafTasks as $index => $task) {
+                // Calculate task-specific timing (earlier tasks start sooner)
+                $taskTimingOffset = ($index / $taskCount) * 0.3; // 0 to 0.3 offset
+                $adjustedProgress = max(0, ($timeProgress - $taskTimingOffset) / (1 - $taskTimingOffset));
 
-        // If project hasn't started yet, skip
-        if ($projectStart->greaterThan($today)) {
-            return 0;
-        }
+                // Apply S-curve formula (logistic function)
+                $percentage = $this->calculateSCurvePercentage($adjustedProgress, $index, $taskCount);
 
-        $totalDays = $projectStart->diffInDays($effectiveEndDate);
-
-        if ($totalDays <= 0) {
-            return 0;
-        }
-
-        $progressEntries = 0;
-
-        // Simulate progress for each leaf task
-        foreach ($leafTasks as $task) {
-            // Randomly decide task progress pattern
-            $completionRate = mt_rand(30, 100) / 100; // 30% to 100% completion
-            $startDelay = mt_rand(0, (int) ($totalDays * 0.3)); // Some tasks start later
-            $progressSpeed = mt_rand(50, 150) / 100; // Some tasks progress faster
-
-            // Determine how many progress entries to create (weekly updates)
-            $intervalDays = $totalDays <= 30 ? 3 : 7;
-
-            $taskStartDate = $projectStart->copy()->addDays($startDelay);
-            $currentDate = $taskStartDate->copy();
-
-            $currentProgress = 0;
-
-            while ($currentDate <= $effectiveEndDate && $currentProgress < 100) {
-                // Calculate expected progress based on time elapsed from task start
-                $daysFromTaskStart = $taskStartDate->diffInDays($currentDate);
-                $taskDuration = $totalDays - $startDelay;
-
-                if ($taskDuration > 0 && $daysFromTaskStart >= 0) {
-                    $timeProgress = ($daysFromTaskStart / $taskDuration) * 100;
-                    // Apply speed factor and completion rate
-                    $targetProgress = min($timeProgress * $progressSpeed * $completionRate, 100);
-
-                    // Add some randomness but ensure progress doesn't decrease
-                    $randomFactor = mt_rand(-5, 10);
-                    $newProgress = max($currentProgress, min($targetProgress + $randomFactor, 100));
-
-                    // Only create entry if progress changed significantly (at least 1%)
-                    if ($newProgress - $currentProgress >= 1) {
-                        DB::table('task_progress')->insert([
-                            'task_id' => $task->id,
-                            'project_id' => $project->id,
-                            'user_id' => $user->id,
-                            'progress_date' => $currentDate->format('Y-m-d'),
-                            'percentage' => round($newProgress, 2),
-                            'notes' => $this->generateNote($newProgress),
-                            'created_at' => $currentDate,
-                            'updated_at' => $currentDate,
-                        ]);
-
-                        $currentProgress = $newProgress;
-                        $progressEntries++;
-                    }
+                // Only save if there's meaningful progress (> 0)
+                if ($percentage > 0) {
+                    $progressEntries[] = [
+                        'task_id' => $task->id,
+                        'project_id' => $project->id,
+                        'user_id' => $user->id,
+                        'percentage' => round($percentage, 2),
+                        'progress_date' => $currentDate->copy()->startOfDay(),
+                        'notes' => $this->generateProgressNote($percentage),
+                        'created_at' => now(),
+                        'updated_at' => now(),
+                    ];
                 }
-
-                $currentDate->addDays($intervalDays);
             }
+
+            // Move to next week (to reduce data volume)
+            $currentDate->addWeek();
         }
 
-        return $progressEntries;
+        // Insert progress entries in chunks
+        $chunks = array_chunk($progressEntries, 500);
+        $totalEntries = count($progressEntries);
+
+        $this->command->info("Inserting {$totalEntries} progress entries...");
+
+        $bar = $this->command->getOutput()->createProgressBar(count($chunks));
+        $bar->start();
+
+        foreach ($chunks as $chunk) {
+            TaskProgress::insert($chunk);
+            $bar->advance();
+        }
+
+        $bar->finish();
+        $this->command->newLine();
+
+        $this->command->info("Successfully seeded {$totalEntries} progress entries for PT Agrinas project.");
+
+        // Show summary
+        $this->showProgressSummary($project->id);
     }
 
-    private function generateNote(float $percentage): ?string
+    /**
+     * Calculate S-curve percentage using logistic function.
+     * This creates the characteristic slow-fast-slow pattern.
+     */
+    private function calculateSCurvePercentage(float $timeProgress, int $taskIndex, int $totalTasks): float
     {
-        if ($percentage >= 100) {
-            return fake()->randomElement([
-                'Task completed',
-                'Finished',
-                'Done',
-                'Completed successfully',
-            ]);
+        if ($timeProgress <= 0) {
+            return 0;
         }
 
-        if ($percentage >= 75) {
-            return fake()->randomElement([
-                'Nearly complete',
-                'Final stages',
-                'Finishing up',
-                null,
-                null,
-            ]);
+        if ($timeProgress >= 1) {
+            return 100;
         }
 
-        if ($percentage >= 50) {
-            return fake()->randomElement([
-                'Good progress',
-                'On track',
-                'Progressing well',
-                null,
-                null,
-                null,
-            ]);
-        }
+        // Logistic S-curve: y = 100 / (1 + e^(-k*(x-0.5)))
+        // k controls steepness, higher = steeper
+        $k = 10;
+        $midpoint = 0.5;
 
-        if ($percentage >= 25) {
-            return fake()->randomElement([
-                'In progress',
-                'Work ongoing',
-                null,
-                null,
-                null,
-            ]);
-        }
+        // Add some variance based on task position
+        $variance = sin($taskIndex * 0.1) * 0.05;
+        $adjustedTime = $timeProgress + $variance;
+        $adjustedTime = max(0, min(1, $adjustedTime));
 
-        return fake()->randomElement([
-            'Started',
-            'Beginning work',
-            null,
-            null,
-        ]);
+        $percentage = 100 / (1 + exp(-$k * ($adjustedTime - $midpoint)));
+
+        // Add small random variance for realism (-2 to +2)
+        $randomVariance = (($taskIndex * 7) % 5) - 2;
+        $percentage = max(0, min(100, $percentage + $randomVariance));
+
+        return $percentage;
+    }
+
+    /**
+     * Generate appropriate note based on progress percentage.
+     */
+    private function generateProgressNote(float $percentage): ?string
+    {
+        if ($percentage < 10) {
+            return 'Pekerjaan baru dimulai';
+        } elseif ($percentage < 30) {
+            return 'Tahap persiapan material';
+        } elseif ($percentage < 50) {
+            return 'Pekerjaan sedang berlangsung';
+        } elseif ($percentage < 70) {
+            return 'Progress sesuai jadwal';
+        } elseif ($percentage < 90) {
+            return 'Mendekati penyelesaian';
+        } elseif ($percentage < 100) {
+            return 'Tahap finishing';
+        } else {
+            return 'Pekerjaan selesai';
+        }
+    }
+
+    /**
+     * Show summary of progress data.
+     */
+    private function showProgressSummary(int $projectId): void
+    {
+        $summary = TaskProgress::where('project_id', $projectId)
+            ->selectRaw('DATE(progress_date) as date, AVG(percentage) as avg_progress, COUNT(*) as entries')
+            ->groupBy('date')
+            ->orderBy('date')
+            ->get();
+
+        $this->command->newLine();
+        $this->command->info('Progress Summary (Average % per date):');
+        $this->command->table(
+            ['Date', 'Avg Progress %', 'Entries'],
+            $summary->map(fn ($row) => [
+                $row->date,
+                number_format($row->avg_progress, 2).'%',
+                $row->entries,
+            ])->toArray()
+        );
     }
 }

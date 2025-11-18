@@ -1,6 +1,6 @@
 <?php
 
-use App\Models\Customer;
+use App\Models\Partner;
 use App\Models\Location;
 use App\Models\Project;
 use Livewire\Volt\Component;
@@ -21,7 +21,7 @@ new class extends Component
 
     public string $description = '';
 
-    public ?int $customerId = null;
+    public ?int $partnerId = null;
 
     public ?int $locationId = null;
 
@@ -36,25 +36,27 @@ new class extends Component
     public function with(): array
     {
         $projects = Project::query()
-            ->with(['customer', 'location'])
+            ->with(['partner', 'location'])
             ->when($this->search, fn ($query) => $query->where('name', 'like', "%{$this->search}%"))
             ->orderBy('name')
             ->paginate(20);
 
-        $customers = Customer::orderBy('name')->get();
-        $locations = Location::orderBy('province_name')->orderBy('city_name')->orderBy('name')->get();
+        $partners = Partner::orderBy('name')->get();
+        $locations = Location::orderBy('province_name')->orderBy('city_name')->orderBy('village_name')->get();
 
         return [
             'projects' => $projects,
-            'customers' => $customers,
+            'partners' => $partners,
             'locations' => $locations,
         ];
     }
 
     public function create(): void
     {
-        $this->reset(['editingId', 'name', 'description', 'customerId', 'locationId', 'startDate', 'endDate', 'status']);
+        $this->reset(['editingId', 'name', 'description', 'partnerId', 'locationId', 'startDate', 'endDate', 'status']);
         $this->status = 'planning';
+        $this->startDate = '2025-11-01';
+        $this->endDate = '2026-01-31';
         $this->showModal = true;
     }
 
@@ -64,7 +66,7 @@ new class extends Component
         $this->editingId = $project->id;
         $this->name = $project->name;
         $this->description = $project->description ?? '';
-        $this->customerId = $project->customer_id;
+        $this->partnerId = $project->partner_id;
         $this->locationId = $project->location_id;
         $this->startDate = $project->start_date?->format('Y-m-d');
         $this->endDate = $project->end_date?->format('Y-m-d');
@@ -77,7 +79,7 @@ new class extends Component
         $validated = $this->validate([
             'name' => ['required', 'string', 'max:255'],
             'description' => ['nullable', 'string'],
-            'customerId' => ['required', 'exists:customers,id'],
+            'partnerId' => ['required', 'exists:partners,id'],
             'locationId' => ['required', 'exists:locations,id'],
             'startDate' => ['nullable', 'date'],
             'endDate' => ['nullable', 'date', 'after_or_equal:startDate'],
@@ -87,7 +89,7 @@ new class extends Component
         $data = [
             'name' => $validated['name'],
             'description' => $validated['description'] ?: null,
-            'customer_id' => $validated['customerId'],
+            'partner_id' => $validated['partnerId'],
             'location_id' => $validated['locationId'],
             'start_date' => $validated['startDate'],
             'end_date' => $validated['endDate'],
@@ -100,7 +102,7 @@ new class extends Component
             Project::create($data);
         }
 
-        $this->reset(['showModal', 'editingId', 'name', 'description', 'customerId', 'locationId', 'startDate', 'endDate', 'status']);
+        $this->reset(['showModal', 'editingId', 'name', 'description', 'partnerId', 'locationId', 'startDate', 'endDate', 'status']);
         $this->dispatch('project-saved');
     }
 
@@ -112,7 +114,7 @@ new class extends Component
 
     public function cancelEdit(): void
     {
-        $this->reset(['showModal', 'editingId', 'name', 'description', 'customerId', 'locationId', 'startDate', 'endDate', 'status']);
+        $this->reset(['showModal', 'editingId', 'name', 'description', 'partnerId', 'locationId', 'startDate', 'endDate', 'status']);
     }
 
     public function updatedSearch(): void
@@ -142,7 +144,7 @@ new class extends Component
             <thead class="border-b border-neutral-200 bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800">
                 <tr>
                     <th class="px-4 py-3 text-left text-sm font-semibold">Name</th>
-                    <th class="px-4 py-3 text-left text-sm font-semibold">Customer</th>
+                    <th class="px-4 py-3 text-left text-sm font-semibold">Partner</th>
                     <th class="px-4 py-3 text-left text-sm font-semibold">Location</th>
                     <th class="px-4 py-3 text-left text-sm font-semibold">Status</th>
                     <th class="px-4 py-3 text-left text-sm font-semibold">Start Date</th>
@@ -155,9 +157,9 @@ new class extends Component
                     <tr wire:key="project-{{ $project->id }}"
                         class="hover:bg-neutral-50 dark:hover:bg-neutral-800/50">
                         <td class="px-4 py-3 text-sm font-medium">{{ $project->name }}</td>
-                        <td class="px-4 py-3 text-sm">{{ $project->customer->name }}</td>
+                        <td class="px-4 py-3 text-sm">{{ $project->partner->name }}</td>
                         <td class="px-4 py-3 text-sm">
-                            <div class="font-medium">{{ $project->location->name }}</div>
+                            <div class="font-medium">{{ $project->location->village_name }}</div>
                             <div class="text-xs text-neutral-500">{{ $project->location->city_name }}, {{ $project->location->province_name }}</div>
                         </td>
                         <td class="px-4 py-3 text-sm">
@@ -223,10 +225,10 @@ new class extends Component
             />
 
             <div class="grid grid-cols-2 gap-4">
-                <flux:select wire:model="customerId" label="Customer" required>
-                    <option value="">Select customer...</option>
-                    @foreach($customers as $customer)
-                        <option value="{{ $customer->id }}">{{ $customer->name }}</option>
+                <flux:select wire:model="partnerId" label="Partner" required>
+                    <option value="">Select partner...</option>
+                    @foreach($partners as $partner)
+                        <option value="{{ $partner->id }}">{{ $partner->name }}</option>
                     @endforeach
                 </flux:select>
 
@@ -234,7 +236,7 @@ new class extends Component
                     <option value="">Select location...</option>
                     @foreach($locations as $location)
                         <option value="{{ $location->id }}">
-                            {{ $location->name }} ({{ $location->city_name }})
+                            {{ $location->village_name }} ({{ $location->city_name }})
                         </option>
                     @endforeach
                 </flux:select>

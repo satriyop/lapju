@@ -1,7 +1,6 @@
 <?php
 
 use Illuminate\Support\Facades\Route;
-use Laravel\Fortify\Features;
 use Livewire\Volt\Volt;
 
 Route::get('/', function () {
@@ -17,7 +16,7 @@ Route::middleware(['auth'])->group(function () {
 Route::middleware(['auth', 'approved'])->group(function () {
     Volt::route('dashboard', 'dashboard')->name('dashboard');
     Volt::route('tasks', 'tasks.index')->name('tasks.index');
-    Volt::route('customers', 'customers.index')->name('customers.index');
+    Volt::route('partners', 'partners.index')->name('partners.index');
     Volt::route('projects', 'projects.index')->name('projects.index');
     Volt::route('progress', 'progress.index')->name('progress.index');
     Volt::route('locations', 'locations.index')->name('locations.index');
@@ -32,4 +31,5 @@ Route::middleware(['auth', 'approved'])->group(function () {
 // Admin routes - require both approval and admin privileges
 Route::middleware(['auth', 'approved', 'admin'])->prefix('admin')->name('admin.')->group(function () {
     Volt::route('users', 'admin.users.index')->name('users.index');
+    Volt::route('offices', 'offices')->name('offices.index');
 });

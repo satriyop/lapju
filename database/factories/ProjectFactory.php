@@ -22,7 +22,7 @@ class ProjectFactory extends Factory
         return [
             'name' => fake()->catchPhrase(),
             'description' => fake()->optional()->paragraph(),
-            'customer_id' => \App\Models\Customer::factory(),
+            'partner_id' => \App\Models\Partner::factory(),
             'location_id' => \App\Models\Location::factory(),
             'start_date' => $startDate,
             'end_date' => $endDate,

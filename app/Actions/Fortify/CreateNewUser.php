@@ -2,6 +2,7 @@
 
 namespace App\Actions\Fortify;
 
+use App\Models\Office;
 use App\Models\User;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\Rule;
@@ -33,6 +34,17 @@ class CreateNewUser implements CreatesNewUsers
                 'max:50',
                 Rule::unique(User::class),
             ],
+            'phone' => [
+                'required',
+                'string',
+                'max:20',
+                'regex:/^[0-9\+\-\s\(\)]+$/',
+            ],
+            'office_id' => [
+                'required',
+                'integer',
+                Rule::exists(Office::class, 'id'),
+            ],
             'password' => $this->passwordRules(),
         ])->validate();
 
@@ -40,6 +52,8 @@ class CreateNewUser implements CreatesNewUsers
             'name' => $input['name'],
             'email' => $input['email'],
             'nrp' => $input['nrp'],
+            'phone' => $input['phone'],
+            'office_id' => $input['office_id'],
             'password' => $input['password'],
             'is_approved' => false, // New users need approval
         ]);

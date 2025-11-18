@@ -15,7 +15,7 @@
                 <flux:navlist.group :heading="__('Platform Progress')" class="grid">
                     <flux:navlist.item icon="home" :href="route('dashboard')" :current="request()->routeIs('dashboard')" wire:navigate>{{ __('Dashboard') }}</flux:navlist.item>
                     <flux:navlist.item icon="clipboard" :href="route('tasks.index')" :current="request()->routeIs('tasks.index')" wire:navigate>{{ __('Tasks') }}</flux:navlist.item>
-                    <flux:navlist.item icon="users" :href="route('customers.index')" :current="request()->routeIs('customers.index')" wire:navigate>{{ __('Customers') }}</flux:navlist.item>
+                    <flux:navlist.item icon="users" :href="route('partners.index')" :current="request()->routeIs('partners.index')" wire:navigate>{{ __('Partners') }}</flux:navlist.item>
                     <flux:navlist.item icon="folder" :href="route('projects.index')" :current="request()->routeIs('projects.index')" wire:navigate>{{ __('Projects') }}</flux:navlist.item>
                     <flux:navlist.item icon="map-pin" :href="route('locations.index')" :current="request()->routeIs('locations.index')" wire:navigate>{{ __('Locations') }}</flux:navlist.item>
                     <flux:navlist.item icon="chart-bar" :href="route('progress.index')" :current="request()->routeIs('progress.index')" wire:navigate>{{ __('Progress') }}</flux:navlist.item>
@@ -24,6 +24,7 @@
                 @if(auth()->user()->isAdmin())
                 <flux:navlist.group :heading="__('Administration')" class="grid">
                     <flux:navlist.item icon="user-group" :href="route('admin.users.index')" :current="request()->routeIs('admin.users.index')" wire:navigate>{{ __('User Management') }}</flux:navlist.item>
+                    <flux:navlist.item icon="building-office" :href="route('admin.offices.index')" :current="request()->routeIs('admin.offices.index')" wire:navigate>{{ __('Offices') }}</flux:navlist.item>
                 </flux:navlist.group>
                 @endif
             </flux:navlist>

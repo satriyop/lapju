@@ -13,7 +13,7 @@ new class extends Component
 
     public ?int $editingId = null;
 
-    public string $name = '';
+    public string $villageName = '';
 
     public string $cityName = '';
 
@@ -25,7 +25,7 @@ new class extends Component
 
     public function create(): void
     {
-        $this->reset(['editingId', 'name', 'cityName', 'provinceName', 'notes']);
+        $this->reset(['editingId', 'villageName', 'cityName', 'provinceName', 'notes']);
         $this->showModal = true;
     }
 
@@ -33,7 +33,7 @@ new class extends Component
     {
         $location = Location::findOrFail($id);
         $this->editingId = $location->id;
-        $this->name = $location->name;
+        $this->villageName = $location->village_name;
         $this->cityName = $location->city_name;
         $this->provinceName = $location->province_name;
         $this->notes = $location->notes ?? '';
@@ -43,7 +43,7 @@ new class extends Component
     public function save(): void
     {
         $this->validate([
-            'name' => 'required|string|max:255',
+            'villageName' => 'required|string|max:255',
             'cityName' => 'required|string|max:255',
             'provinceName' => 'required|string|max:255',
             'notes' => 'nullable|string',
@@ -52,14 +52,14 @@ new class extends Component
         if ($this->editingId) {
             $location = Location::findOrFail($this->editingId);
             $location->update([
-                'name' => $this->name,
+                'village_name' => $this->villageName,
                 'city_name' => $this->cityName,
                 'province_name' => $this->provinceName,
                 'notes' => $this->notes ?: null,
             ]);
         } else {
             Location::create([
-                'name' => $this->name,
+                'village_name' => $this->villageName,
                 'city_name' => $this->cityName,
                 'province_name' => $this->provinceName,
                 'notes' => $this->notes ?: null,
@@ -67,7 +67,7 @@ new class extends Component
         }
 
         $this->showModal = false;
-        $this->reset(['editingId', 'name', 'cityName', 'provinceName', 'notes']);
+        $this->reset(['editingId', 'villageName', 'cityName', 'provinceName', 'notes']);
     }
 
     public function delete(int $id): void
@@ -83,13 +83,13 @@ new class extends Component
     public function with(): array
     {
         $locations = Location::query()
-            ->when($this->search, fn ($q) => $q->where('name', 'like', "%{$this->search}%")
+            ->when($this->search, fn ($q) => $q->where('village_name', 'like', "%{$this->search}%")
                 ->orWhere('city_name', 'like', "%{$this->search}%")
                 ->orWhere('province_name', 'like', "%{$this->search}%"))
             ->withCount('projects')
             ->orderBy('province_name')
             ->orderBy('city_name')
-            ->orderBy('name')
+            ->orderBy('village_name')
             ->get();
 
         return [
@@ -134,7 +134,7 @@ new class extends Component
         <table class="min-w-full divide-y divide-neutral-200 dark:divide-neutral-700">
             <thead class="bg-neutral-50 dark:bg-neutral-800">
                 <tr>
-                    <th class="px-4 py-3 text-left text-sm font-medium text-neutral-900 dark:text-neutral-100">Location Name</th>
+                    <th class="px-4 py-3 text-left text-sm font-medium text-neutral-900 dark:text-neutral-100">Village Name</th>
                     <th class="px-4 py-3 text-left text-sm font-medium text-neutral-900 dark:text-neutral-100">City / Province</th>
                     <th class="px-4 py-3 text-left text-sm font-medium text-neutral-900 dark:text-neutral-100">Notes</th>
                     <th class="px-4 py-3 text-left text-sm font-medium text-neutral-900 dark:text-neutral-100">Projects</th>
@@ -153,7 +153,7 @@ new class extends Component
                                     </svg>
                                 </div>
                                 <div class="font-medium text-neutral-900 dark:text-neutral-100">
-                                    {{ $location->name }}
+                                    {{ $location->village_name }}
                                 </div>
                             </div>
                         </td>
@@ -234,10 +234,10 @@ new class extends Component
             <flux:heading size="lg">{{ $editingId ? 'Edit Location' : 'Add Location' }}</flux:heading>
 
             <flux:input
-                wire:model="name"
-                label="Location Name"
+                wire:model="villageName"
+                label="Village Name"
                 type="text"
-                placeholder="e.g., Markas Komando TNI AD"
+                placeholder="e.g., Jebres, Mojosongo"
                 required
             />
 
