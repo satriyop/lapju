@@ -27,9 +27,13 @@ Route::middleware(['auth', 'approved'])->group(function () {
     Volt::route('settings/appearance', 'settings.appearance')->name('appearance.edit');
 });
 
-// Admin routes - require both approval and admin privileges
-Route::middleware(['auth', 'approved', 'admin'])->prefix('admin')->name('admin.')->group(function () {
+// User management route - accessible by admins and users with manage_users permission
+Route::middleware(['auth', 'approved'])->prefix('admin')->name('admin.')->group(function () {
     Volt::route('users', 'admin.users.index')->name('users.index');
+});
+
+// Admin-only routes
+Route::middleware(['auth', 'approved', 'admin'])->prefix('admin')->name('admin.')->group(function () {
     Volt::route('offices', 'offices')->name('offices.index');
     Volt::route('locations', 'locations.index')->name('locations.index');
     Volt::route('roles', 'roles.index')->name('roles.index');

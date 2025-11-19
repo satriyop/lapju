@@ -22,8 +22,8 @@ class RoleSeeder extends Seeder
             ],
             [
                 'name' => 'Reporter',
-                'description' => 'Can create projects, report progress and update task completion',
-                'office_level_id' => null,
+                'description' => 'Can create projects, report progress and update task completion at Koramil level',
+                'office_level_id' => 4, // Koramil level
                 'permissions' => ['view_projects', 'create_projects', 'update_progress', 'view_tasks'],
                 'is_system' => false,
             ],
@@ -36,9 +36,9 @@ class RoleSeeder extends Seeder
             ],
             [
                 'name' => 'Manager',
-                'description' => 'Can manage projects, tasks, and view reports',
-                'office_level_id' => null,
-                'permissions' => ['view_projects', 'edit_projects', 'view_tasks', 'edit_tasks', 'view_reports'],
+                'description' => 'Can manage projects, tasks, approve users at Kodim level',
+                'office_level_id' => 3, // Kodim level
+                'permissions' => ['view_projects', 'edit_projects', 'view_tasks', 'edit_tasks', 'view_reports', 'manage_users'],
                 'is_system' => false,
             ],
         ];

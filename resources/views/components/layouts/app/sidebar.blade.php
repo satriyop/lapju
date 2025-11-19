@@ -20,9 +20,14 @@
                     <flux:navlist.item icon="calendar" :href="route('calendar-progress.index')" :current="request()->routeIs('calendar-progress.index')" wire:navigate>{{ __('Calendar Progress') }}</flux:navlist.item>
                 </flux:navlist.group>
 
+                @if(auth()->user()->hasPermission('manage_users'))
+                    <flux:navlist.group :heading="__('User Management')" class="grid">
+                        <flux:navlist.item icon="user-group" :href="route('admin.users.index')" :current="request()->routeIs('admin.users.index')" wire:navigate>{{ __('Users') }}</flux:navlist.item>
+                    </flux:navlist.group>
+                @endif
+
                 @if(auth()->user()->isAdmin())
                 <flux:navlist.group :heading="__('Administration')" class="grid">
-                    <flux:navlist.item icon="user-group" :href="route('admin.users.index')" :current="request()->routeIs('admin.users.index')" wire:navigate>{{ __('User Management') }}</flux:navlist.item>
                     <flux:navlist.item icon="building-office" :href="route('admin.offices.index')" :current="request()->routeIs('admin.offices.index')" wire:navigate>{{ __('Offices') }}</flux:navlist.item>
                     <flux:navlist.item icon="map-pin" :href="route('admin.locations.index')" :current="request()->routeIs('admin.locations.index')" wire:navigate>{{ __('Locations') }}</flux:navlist.item>
                     <flux:navlist.item icon="shield-check" :href="route('admin.roles.index')" :current="request()->routeIs('admin.roles.index')" wire:navigate>{{ __('Roles') }}</flux:navlist.item>

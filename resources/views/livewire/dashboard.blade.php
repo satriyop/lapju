@@ -40,12 +40,17 @@ new class extends Component
 
     public array $expandedWeeks = [];
 
+    // Lock filters for Managers to their Kodim coverage
+    public bool $filtersLocked = false;
+
     public function mount(): void
     {
+        $currentUser = auth()->user();
+
         // Reporters don't use office filters - just their assigned projects
-        if (auth()->user()->hasRole('Reporter')) {
+        if ($currentUser->hasRole('Reporter')) {
             // Auto-select first project assigned to this reporter
-            $firstProject = auth()->user()->projects()->first();
+            $firstProject = $currentUser->projects()->first();
             if ($firstProject) {
                 $this->selectedProjectId = $firstProject->id;
                 $this->setProjectDates();
@@ -54,21 +59,44 @@ new class extends Component
             return;
         }
 
-        // Set default filters to Kodam IV and Korem 074 for non-reporters
-        $kodamIV = Office::whereHas('level', fn ($q) => $q->where('level', 1))
-            ->where('name', 'like', '%Kodam IV%')
-            ->first();
+        // Managers at Kodim level - set defaults to their Kodim and lock filters
+        if ($currentUser->office_id) {
+            $userOffice = Office::with('level', 'parent.parent')->find($currentUser->office_id);
 
-        $korem074 = Office::whereHas('level', fn ($q) => $q->where('level', 2))
-            ->where('name', 'like', '%074%')
-            ->first();
+            if ($userOffice && $userOffice->level->level === 3) {
+                // Manager at Kodim level - set their hierarchy as defaults
+                $this->selectedKodimId = $userOffice->id;
 
-        if ($kodamIV) {
-            $this->selectedKodamId = $kodamIV->id;
+                if ($userOffice->parent) {
+                    $this->selectedKoremId = $userOffice->parent->id;
+
+                    if ($userOffice->parent->parent) {
+                        $this->selectedKodamId = $userOffice->parent->parent->id;
+                    }
+                }
+
+                // Lock filters to prevent changing coverage
+                $this->filtersLocked = true;
+            }
         }
 
-        if ($korem074) {
-            $this->selectedKoremId = $korem074->id;
+        // If not a Manager or no office assigned, set default filters to Kodam IV and Korem 074
+        if (!$this->selectedKodamId) {
+            $kodamIV = Office::whereHas('level', fn ($q) => $q->where('level', 1))
+                ->where('name', 'like', '%Kodam IV%')
+                ->first();
+
+            $korem074 = Office::whereHas('level', fn ($q) => $q->where('level', 2))
+                ->where('name', 'like', '%074%')
+                ->first();
+
+            if ($kodamIV) {
+                $this->selectedKodamId = $kodamIV->id;
+            }
+
+            if ($korem074) {
+                $this->selectedKoremId = $korem074->id;
+            }
         }
 
         // Auto-select first project
@@ -86,6 +114,11 @@ new class extends Component
 
     public function updatedSelectedKodamId(): void
     {
+        // Prevent changes if filters are locked
+        if ($this->filtersLocked) {
+            return;
+        }
+
         // Reset child selections when parent changes
         $this->selectedKoremId = null;
         $this->selectedKodimId = null;
@@ -95,6 +128,11 @@ new class extends Component
 
     public function updatedSelectedKoremId(): void
     {
+        // Prevent changes if filters are locked
+        if ($this->filtersLocked) {
+            return;
+        }
+
         // Reset child selections when parent changes
         $this->selectedKodimId = null;
         $this->selectedKoramilId = null;
@@ -103,6 +141,11 @@ new class extends Component
 
     public function updatedSelectedKodimId(): void
     {
+        // Prevent changes if filters are locked
+        if ($this->filtersLocked) {
+            return;
+        }
+
         // Reset child selections when parent changes
         $this->selectedKoramilId = null;
         $this->selectedProjectId = null;
@@ -192,7 +235,30 @@ new class extends Component
             return $query->orderBy('name')->get();
         }
 
-        // Filter by the lowest selected office level
+        // Managers at Kodim level can only see projects in Koramils under their Kodim
+        $currentUser = auth()->user();
+        if ($currentUser->hasRole('Manager') && $currentUser->office_id) {
+            $userOffice = Office::with('level')->find($currentUser->office_id);
+            if ($userOffice && $userOffice->level->level === 3) {
+                // Limit to projects in Koramils under this Kodim
+                $koramils = Office::where('parent_id', $currentUser->office_id)->pluck('id');
+                $query->whereIn('office_id', $koramils);
+
+                // If they've selected a specific Koramil, further filter to that
+                if ($this->selectedKoramilId) {
+                    $query->where('office_id', $this->selectedKoramilId);
+                }
+
+                // Location filtering still applies
+                if ($this->selectedLocationId) {
+                    $query->where('location_id', $this->selectedLocationId);
+                }
+
+                return $query->orderBy('name')->get();
+            }
+        }
+
+        // Filter by the lowest selected office level (for non-Managers)
         if ($this->selectedKoramilId) {
             // Filter by specific Koramil
             $query->where('office_id', $this->selectedKoramilId);
@@ -730,7 +796,7 @@ new class extends Component
         <div class="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
             @if(!auth()->user()->hasRole('Reporter'))
                 <!-- Kodam Filter -->
-                <flux:select wire:model.live="selectedKodamId" label="Kodam">
+                <flux:select wire:model.live="selectedKodamId" label="Kodam" :disabled="$filtersLocked">
                     <option value="">All Kodam</option>
                     @foreach($kodams as $kodam)
                         <option value="{{ $kodam->id }}">
@@ -740,7 +806,7 @@ new class extends Component
                 </flux:select>
 
                 <!-- Korem Filter (enabled only if Kodam is selected) -->
-                <flux:select wire:model.live="selectedKoremId" label="Korem" :disabled="!$this->selectedKodamId">
+                <flux:select wire:model.live="selectedKoremId" label="Korem" :disabled="$filtersLocked || !$this->selectedKodamId">
                     <option value="">{{ $this->selectedKodamId ? 'Select Korem...' : 'Select Kodam first' }}</option>
                     @foreach($korems as $korem)
                         <option value="{{ $korem->id }}">
@@ -750,7 +816,7 @@ new class extends Component
                 </flux:select>
 
                 <!-- Kodim Filter (enabled only if Korem is selected) -->
-                <flux:select wire:model.live="selectedKodimId" label="Kodim" :disabled="!$this->selectedKoremId">
+                <flux:select wire:model.live="selectedKodimId" label="Kodim" :disabled="$filtersLocked || !$this->selectedKoremId">
                     <option value="">{{ $this->selectedKoremId ? 'Select Kodim...' : 'Select Korem first' }}</option>
                     @foreach($kodims as $kodim)
                         <option value="{{ $kodim->id }}">

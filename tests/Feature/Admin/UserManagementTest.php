@@ -4,6 +4,7 @@ namespace Tests\Feature\Admin;
 
 use App\Models\Office;
 use App\Models\OfficeLevel;
+use App\Models\Role;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Volt\Volt;
@@ -304,5 +305,102 @@ class UserManagementTest extends TestCase
         $user = User::where('email', 'passtest@example.com')->first();
         $this->assertNotEquals('password123', $user->password);
         $this->assertTrue(password_verify('password123', $user->password));
+    }
+
+    public function test_approved_user_automatically_gets_reporter_role(): void
+    {
+        Volt::actingAs($this->admin)
+            ->test('admin.users.index')
+            ->call('openCreateModal')
+            ->set('createName', 'Reporter User')
+            ->set('createEmail', 'reporter@example.com')
+            ->set('createNrp', 'NRP444')
+            ->set('createPhone', '08123456789')
+            ->set('createKodimId', $this->kodim->id)
+            ->set('createOfficeId', $this->koramil->id)
+            ->set('createPassword', 'password123')
+            ->set('createPasswordConfirmation', 'password123')
+            ->set('createIsApproved', true)
+            ->call('createUser')
+            ->assertHasNoErrors();
+
+        $user = User::where('email', 'reporter@example.com')->first();
+        $this->assertTrue($user->hasRole('Reporter'));
+
+        $reporterRole = Role::where('name', 'Reporter')->first();
+        $this->assertNotNull($reporterRole);
+        $this->assertTrue($user->roles->contains($reporterRole));
+    }
+
+    public function test_pending_user_does_not_get_reporter_role(): void
+    {
+        Volt::actingAs($this->admin)
+            ->test('admin.users.index')
+            ->call('openCreateModal')
+            ->set('createName', 'Pending User')
+            ->set('createEmail', 'pending2@example.com')
+            ->set('createNrp', 'NRP333')
+            ->set('createPhone', '08123456789')
+            ->set('createKodimId', $this->kodim->id)
+            ->set('createOfficeId', $this->koramil->id)
+            ->set('createPassword', 'password123')
+            ->set('createPasswordConfirmation', 'password123')
+            ->set('createIsApproved', false)
+            ->call('createUser')
+            ->assertHasNoErrors();
+
+        $user = User::where('email', 'pending2@example.com')->first();
+        $this->assertFalse($user->hasRole('Reporter'));
+        $this->assertCount(0, $user->roles);
+    }
+
+    public function test_approving_pending_user_assigns_reporter_role(): void
+    {
+        // Create a pending user
+        $pendingUser = User::factory()->create([
+            'is_approved' => false,
+            'office_id' => $this->koramil->id,
+        ]);
+
+        $this->assertFalse($pendingUser->hasRole('Reporter'));
+
+        // Approve the user
+        Volt::actingAs($this->admin)
+            ->test('admin.users.index')
+            ->call('approveUser', $pendingUser->id);
+
+        $pendingUser->refresh();
+        $this->assertTrue($pendingUser->is_approved);
+        $this->assertTrue($pendingUser->hasRole('Reporter'));
+        $this->assertNotNull($pendingUser->approved_at);
+        $this->assertEquals($this->admin->id, $pendingUser->approved_by);
+    }
+
+    public function test_reporter_role_is_created_if_not_exists(): void
+    {
+        // Ensure Reporter role doesn't exist
+        Role::where('name', 'Reporter')->delete();
+
+        Volt::actingAs($this->admin)
+            ->test('admin.users.index')
+            ->call('openCreateModal')
+            ->set('createName', 'Role Test User')
+            ->set('createEmail', 'roletest@example.com')
+            ->set('createNrp', 'NRP222')
+            ->set('createPhone', '08123456789')
+            ->set('createKodimId', $this->kodim->id)
+            ->set('createOfficeId', $this->koramil->id)
+            ->set('createPassword', 'password123')
+            ->set('createPasswordConfirmation', 'password123')
+            ->set('createIsApproved', true)
+            ->call('createUser')
+            ->assertHasNoErrors();
+
+        // Verify Reporter role was created
+        $reporterRole = Role::where('name', 'Reporter')->first();
+        $this->assertNotNull($reporterRole);
+
+        $user = User::where('email', 'roletest@example.com')->first();
+        $this->assertTrue($user->hasRole('Reporter'));
     }
 }

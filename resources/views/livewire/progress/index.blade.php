@@ -1,5 +1,6 @@
 <?php
 
+use App\Models\Office;
 use App\Models\Project;
 use App\Models\Task;
 use App\Models\TaskProgress;
@@ -30,8 +31,21 @@ new class extends Component
         $this->selectedDate = now()->format('Y-m-d');
         $this->maxDate = now()->format('Y-m-d');
 
-        // Auto-select first project if available
-        $firstProject = Project::first();
+        // Auto-select first project if available (with Manager coverage filtering)
+        $currentUser = auth()->user();
+        $projectQuery = Project::query();
+
+        // Managers at Kodim level can only see projects in Koramils under their Kodim
+        if ($currentUser->hasRole('Manager') && $currentUser->office_id) {
+            $userOffice = Office::with('level')->find($currentUser->office_id);
+            if ($userOffice && $userOffice->level->level === 3) {
+                $projectQuery->whereHas('office', function ($q) use ($currentUser) {
+                    $q->where('parent_id', $currentUser->office_id);
+                });
+            }
+        }
+
+        $firstProject = $projectQuery->first();
         if ($firstProject) {
             $this->selectedProjectId = $firstProject->id;
             $this->loadProgressData();
@@ -241,7 +255,20 @@ new class extends Component
 
     public function with(): array
     {
-        $projects = Project::with('location', 'partner')->orderBy('name')->get();
+        $currentUser = auth()->user();
+        $projectsQuery = Project::with('location', 'partner');
+
+        // Managers at Kodim level can only see projects in Koramils under their Kodim
+        if ($currentUser->hasRole('Manager') && $currentUser->office_id) {
+            $userOffice = Office::with('level')->find($currentUser->office_id);
+            if ($userOffice && $userOffice->level->level === 3) {
+                $projectsQuery->whereHas('office', function ($q) use ($currentUser) {
+                    $q->where('parent_id', $currentUser->office_id);
+                });
+            }
+        }
+
+        $projects = $projectsQuery->orderBy('name')->get();
 
         // Filter tasks by selected project
         $rootTasks = collect();

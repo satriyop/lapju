@@ -93,21 +93,44 @@ new class extends Component
                 ->get()
             : collect();
 
-        $koramils = $this->kodimId
-            ? Office::where('parent_id', $this->kodimId)
-                ->whereHas('level', fn ($q) => $q->where('level', 4))
-                ->orderBy('name')
-                ->get()
-            : collect();
+        // For Managers, load koramils under their Kodim; otherwise use selected kodimId
+        $currentUser = auth()->user();
+        if ($currentUser->hasRole('Manager') && $currentUser->office_id) {
+            $userOffice = Office::with('level')->find($currentUser->office_id);
+            if ($userOffice && $userOffice->level->level === 3) {
+                $koramils = Office::where('parent_id', $currentUser->office_id)
+                    ->whereHas('level', fn ($q) => $q->where('level', 4))
+                    ->orderBy('name')
+                    ->get();
+            } else {
+                $koramils = collect();
+            }
+        } else {
+            $koramils = $this->kodimId
+                ? Office::where('parent_id', $this->kodimId)
+                    ->whereHas('level', fn ($q) => $q->where('level', 4))
+                    ->orderBy('name')
+                    ->get()
+                : collect();
+        }
 
         // Get projects based on filters
         $projectsQuery = Project::with('location', 'partner')->orderBy('name');
 
         // Reporters can only see their assigned projects
-        if (auth()->user()->hasRole('Reporter')) {
+        if ($currentUser->hasRole('Reporter')) {
             $projectsQuery->whereHas('users', fn ($q) => $q->where('users.id', auth()->id()));
+        }
+        // Managers at Kodim level can only see projects in Koramils under their Kodim
+        elseif ($currentUser->hasRole('Manager') && $currentUser->office_id) {
+            $userOffice = Office::with('level')->find($currentUser->office_id);
+            if ($userOffice && $userOffice->level->level === 3) {
+                $projectsQuery->whereHas('office', function ($q) use ($currentUser) {
+                    $q->where('parent_id', $currentUser->office_id);
+                });
+            }
         } else {
-            // Build office filter for non-reporters
+            // Build office filter for non-reporters/non-managers
             $officeId = $this->koramilId ?? $this->kodimId ?? $this->koremId ?? $this->kodamId;
 
             if ($officeId) {
@@ -202,7 +225,7 @@ new class extends Component
 
     <!-- Filters -->
     <div class="grid grid-cols-1 gap-4 md:grid-cols-5">
-        @if(!auth()->user()->hasRole('Reporter'))
+        @if(!auth()->user()->hasRole('Reporter') && !auth()->user()->hasRole('Manager'))
             <!-- Kodam -->
             <div>
                 <label class="mb-2 block text-xs font-medium text-neutral-400">Kodam</label>
@@ -247,6 +270,21 @@ new class extends Component
                 <label class="mb-2 block text-xs font-medium text-neutral-400">Koramil</label>
                 <flux:select wire:model.live="koramilId" class="bg-neutral-800 text-white" :disabled="!$kodimId">
                     <flux:select.option value="">{{ $kodimId ? 'All Koramil' : 'Select Kodim first' }}</flux:select.option>
+                    @foreach($koramils as $koramil)
+                        <flux:select.option value="{{ $koramil->id }}">
+                            {{ $koramil->name }}
+                        </flux:select.option>
+                    @endforeach
+                </flux:select>
+            </div>
+        @endif
+
+        @if(auth()->user()->hasRole('Manager'))
+            <!-- Koramil (Manager sees only Koramils under their Kodim) -->
+            <div>
+                <label class="mb-2 block text-xs font-medium text-neutral-400">Koramil</label>
+                <flux:select wire:model.live="koramilId" class="bg-neutral-800 text-white">
+                    <flux:select.option value="">All Koramil</flux:select.option>
                     @foreach($koramils as $koramil)
                         <flux:select.option value="{{ $koramil->id }}">
                             {{ $koramil->name }}

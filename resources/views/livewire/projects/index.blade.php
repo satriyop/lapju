@@ -46,11 +46,23 @@ new class extends Component
 
     public function with(): array
     {
-        $projects = Project::query()
+        $currentUser = auth()->user();
+        $projectsQuery = Project::query()
             ->with(['partner', 'location', 'office'])
-            ->when($this->search, fn ($query) => $query->where('name', 'like', "%{$this->search}%"))
-            ->orderBy('name')
-            ->paginate(20);
+            ->when($this->search, fn ($query) => $query->where('name', 'like', "%{$this->search}%"));
+
+        // Managers at Kodim level can only see projects in Koramils under their Kodim
+        if ($currentUser->hasRole('Manager') && $currentUser->office_id) {
+            $userOffice = Office::with('level')->find($currentUser->office_id);
+            if ($userOffice && $userOffice->level->level === 3) {
+                // Filter projects to only show those assigned to Koramils under this Kodim
+                $projectsQuery->whereHas('office', function ($q) use ($currentUser) {
+                    $q->where('parent_id', $currentUser->office_id);
+                });
+            }
+        }
+
+        $projects = $projectsQuery->orderBy('name')->paginate(20);
 
         $partners = Partner::orderBy('name')->get();
 

@@ -131,4 +131,19 @@ class User extends Authenticatable
 
         return $this->roles->contains('name', $role);
     }
+
+    /**
+     * Check if the user has a specific permission.
+     */
+    public function hasPermission(string $permission): bool
+    {
+        if ($this->isAdmin()) {
+            return true;
+        }
+
+        return $this->roles
+            ->pluck('permissions')
+            ->flatten()
+            ->contains(fn ($p) => $p === '*' || $p === $permission);
+    }
 }

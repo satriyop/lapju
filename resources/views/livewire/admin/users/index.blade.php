@@ -3,6 +3,7 @@
 use App\Models\Office;
 use App\Models\OfficeLevel;
 use App\Models\Project;
+use App\Models\Role;
 use App\Models\User;
 use Illuminate\Support\Facades\Auth;
 use Livewire\Volt\Component;
@@ -48,7 +49,7 @@ new class extends Component
 
     public string $createPhone = '';
 
-    public ?int $createKodimId = null;
+    public ?int $createRoleId = null;
 
     public ?int $createOfficeId = null;
 
@@ -60,9 +61,17 @@ new class extends Component
 
     public bool $createIsApproved = true;
 
-    public function updatedCreateKodimId(): void
+    public function mount(): void
     {
-        // Reset office when kodim changes
+        // Check if user has permission to manage users
+        if (! Auth::user()->hasPermission('manage_users')) {
+            abort(403, 'Unauthorized access to user management.');
+        }
+    }
+
+    public function updatedCreateRoleId(): void
+    {
+        // Reset office when role changes
         $this->createOfficeId = null;
     }
 
@@ -73,7 +82,7 @@ new class extends Component
             'createEmail',
             'createNrp',
             'createPhone',
-            'createKodimId',
+            'createRoleId',
             'createOfficeId',
             'createPassword',
             'createPasswordConfirmation',
@@ -90,15 +99,17 @@ new class extends Component
             'createEmail' => ['required', 'string', 'email', 'max:255', 'unique:users,email'],
             'createNrp' => ['required', 'string', 'max:50', 'unique:users,nrp'],
             'createPhone' => ['required', 'string', 'max:20', 'regex:/^[0-9\+\-\s\(\)]+$/'],
-            'createKodimId' => ['required', 'integer', 'exists:offices,id'],
+            'createRoleId' => ['required', 'integer', 'exists:roles,id'],
             'createOfficeId' => ['required', 'integer', 'exists:offices,id'],
             'createPassword' => ['required', 'string', 'min:8', 'same:createPasswordConfirmation'],
         ]);
 
-        // Verify the selected office belongs to the selected kodim
-        $office = Office::find($this->createOfficeId);
-        if (! $office || $office->parent_id !== $this->createKodimId) {
-            $this->addError('createOfficeId', 'Invalid office selection.');
+        // Verify the selected office matches the role's required level
+        $role = Role::find($this->createRoleId);
+        $office = Office::with('level')->find($this->createOfficeId);
+
+        if ($role->office_level_id && $office->level->id !== $role->office_level_id) {
+            $this->addError('createOfficeId', 'Invalid office selection for this role.');
 
             return;
         }
@@ -119,7 +130,16 @@ new class extends Component
             $userData['approved_by'] = Auth::id();
         }
 
-        User::create($userData);
+        $user = User::create($userData);
+
+        // Assign the selected role to the user
+        if ($this->createIsApproved) {
+            $user->roles()->attach($this->createRoleId, [
+                'assigned_by' => Auth::id(),
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+        }
 
         $this->showCreateModal = false;
         $this->reset([
@@ -127,7 +147,7 @@ new class extends Component
             'createEmail',
             'createNrp',
             'createPhone',
-            'createKodimId',
+            'createRoleId',
             'createOfficeId',
             'createPassword',
             'createPasswordConfirmation',
@@ -139,21 +159,76 @@ new class extends Component
     public function approveUser(int $userId): void
     {
         $user = User::findOrFail($userId);
+
+        // Check if current user can manage this user
+        if (!$this->canManageUser($user)) {
+            abort(403, 'You do not have permission to approve this user.');
+        }
+
         $user->update([
             'is_approved' => true,
             'approved_at' => now(),
             'approved_by' => Auth::id(),
         ]);
+
+        // Automatically assign Reporter role to newly approved users
+        $reporterRole = Role::firstOrCreate(['name' => 'Reporter']);
+        if (! $user->hasRole($reporterRole)) {
+            $user->roles()->attach($reporterRole->id, [
+                'assigned_by' => Auth::id(),
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+        }
+    }
+
+    /**
+     * Check if current user can manage the given user based on coverage.
+     */
+    private function canManageUser(User $targetUser): bool
+    {
+        $currentUser = Auth::user();
+
+        // Admins can manage everyone
+        if ($currentUser->isAdmin()) {
+            return true;
+        }
+
+        // Must have office assigned
+        if (!$currentUser->office_id || !$targetUser->office_id) {
+            return false;
+        }
+
+        $currentOffice = Office::with('level')->find($currentUser->office_id);
+
+        // If Manager at Kodim level, can only manage users in Koramil under their Kodim
+        if ($currentOffice && $currentOffice->level->level === 3) {
+            $targetOffice = Office::find($targetUser->office_id);
+            return $targetOffice && $targetOffice->parent_id === $currentUser->office_id;
+        }
+
+        return false;
     }
 
     public function rejectUser(int $userId): void
     {
         $user = User::findOrFail($userId);
+
+        // Check if current user can manage this user
+        if (!$this->canManageUser($user)) {
+            abort(403, 'You do not have permission to reject this user.');
+        }
+
         $user->delete();
     }
 
     public function toggleAdmin(int $userId): void
     {
+        // Only admins can toggle admin status
+        if (!Auth::user()->isAdmin()) {
+            abort(403, 'Only admins can change admin status.');
+        }
+
         $user = User::findOrFail($userId);
         if ($user->id !== Auth::id()) {
             $user->update(['is_admin' => ! $user->is_admin]);
@@ -163,6 +238,12 @@ new class extends Component
     public function editUser(int $userId): void
     {
         $user = User::findOrFail($userId);
+
+        // Check if current user can manage this user
+        if (!$this->canManageUser($user)) {
+            abort(403, 'You do not have permission to edit this user.');
+        }
+
         $this->editingUserId = $user->id;
         $this->editName = $user->name;
         $this->editEmail = $user->email;
@@ -182,6 +263,12 @@ new class extends Component
         ]);
 
         $user = User::findOrFail($this->editingUserId);
+
+        // Check if current user can manage this user
+        if (!$this->canManageUser($user)) {
+            abort(403, 'You do not have permission to edit this user.');
+        }
+
         $user->update([
             'name' => $this->editName,
             'email' => $this->editEmail,
@@ -213,6 +300,12 @@ new class extends Component
     public function deleteUser(int $userId): void
     {
         $user = User::findOrFail($userId);
+
+        // Check if current user can manage this user
+        if (!$this->canManageUser($user)) {
+            abort(403, 'You do not have permission to delete this user.');
+        }
+
         if ($user->id !== Auth::id()) {
             $user->delete();
         }
@@ -220,6 +313,9 @@ new class extends Component
 
     public function with(): array
     {
+        $currentUser = Auth::user();
+        $isAdmin = $currentUser->isAdmin();
+
         $query = User::query()
             ->when($this->search, fn ($q) => $q->where('name', 'like', "%{$this->search}%")
                 ->orWhere('email', 'like', "%{$this->search}%")
@@ -227,10 +323,33 @@ new class extends Component
             ->when($this->filter === 'pending', fn ($q) => $q->where('is_approved', false))
             ->when($this->filter === 'approved', fn ($q) => $q->where('is_approved', true))
             ->when($this->filter === 'admin', fn ($q) => $q->where('is_admin', true))
-            ->with('approvedBy', 'projects', 'office.parent', 'office.level')
-            ->orderByDesc('created_at');
+            ->with('approvedBy', 'projects', 'office.parent', 'office.level', 'roles');
 
-        $pendingCount = User::where('is_approved', false)->count();
+        // Managers can only see users under their Kodim coverage
+        if (!$isAdmin && $currentUser->office_id) {
+            $currentOffice = Office::with('level')->find($currentUser->office_id);
+
+            // If user is at Kodim level (Manager), filter users to only show Koramil under their Kodim
+            if ($currentOffice && $currentOffice->level->level === 3) {
+                $query->whereHas('office', function ($q) use ($currentUser) {
+                    $q->where('parent_id', $currentUser->office_id);
+                });
+            }
+        }
+
+        $query->orderByDesc('created_at');
+
+        // Count pending users with coverage filter
+        $pendingCountQuery = User::where('is_approved', false);
+        if (!$isAdmin && $currentUser->office_id) {
+            $currentOffice = Office::with('level')->find($currentUser->office_id);
+            if ($currentOffice && $currentOffice->level->level === 3) {
+                $pendingCountQuery->whereHas('office', function ($q) use ($currentUser) {
+                    $q->where('parent_id', $currentUser->office_id);
+                });
+            }
+        }
+        $pendingCount = $pendingCountQuery->count();
         $projects = Project::with('location', 'partner')->orderBy('name')->get();
 
         // Get all offices grouped by level for the edit modal
@@ -240,24 +359,49 @@ new class extends Component
             ->get()
             ->groupBy(fn ($office) => $office->level->name);
 
-        // Get Kodims for create user modal (level 3)
-        $kodimLevel = OfficeLevel::where('level', 3)->first();
-        $kodims = $kodimLevel
-            ? Office::where('level_id', $kodimLevel->id)->orderBy('name')->get()
-            : collect();
+        // Get all roles for selection
+        $roles = Role::orderBy('name')->get();
 
-        // Get Koramils for selected Kodim
-        $koramils = $this->createKodimId
-            ? Office::where('parent_id', $this->createKodimId)->orderBy('name')->get()
-            : collect();
+        // Get offices based on selected role's office level
+        $availableOffices = collect();
+        if ($this->createRoleId) {
+            $selectedRole = Role::find($this->createRoleId);
+            if ($selectedRole && $selectedRole->office_level_id) {
+                $officesQuery = Office::where('level_id', $selectedRole->office_level_id);
+
+                // Managers can only assign users to Koramils under their Kodim
+                if (!$isAdmin && $currentUser->office_id) {
+                    $currentOffice = Office::with('level')->find($currentUser->office_id);
+                    if ($currentOffice && $currentOffice->level->level === 3) {
+                        // If Manager, only show Koramils under their Kodim
+                        $officesQuery->where('parent_id', $currentUser->office_id);
+                    }
+                }
+
+                $availableOffices = $officesQuery->orderBy('name')->get();
+            } else {
+                // If role doesn't have office_level_id restriction, show all offices
+                $officesQuery = Office::with('level')->orderBy('level_id')->orderBy('name');
+
+                // Managers can only assign to offices under their coverage
+                if (!$isAdmin && $currentUser->office_id) {
+                    $currentOffice = Office::with('level')->find($currentUser->office_id);
+                    if ($currentOffice && $currentOffice->level->level === 3) {
+                        $officesQuery->where('parent_id', $currentUser->office_id);
+                    }
+                }
+
+                $availableOffices = $officesQuery->get();
+            }
+        }
 
         return [
             'users' => $query->get(),
             'pendingCount' => $pendingCount,
             'projects' => $projects,
             'offices' => $offices,
-            'kodims' => $kodims,
-            'koramils' => $koramils,
+            'roles' => $roles,
+            'availableOffices' => $availableOffices,
         ];
     }
 }; ?>
@@ -307,6 +451,7 @@ new class extends Component
                 <tr>
                     <th class="px-4 py-3 text-left text-sm font-medium text-neutral-900 dark:text-neutral-100">User</th>
                     <th class="px-4 py-3 text-left text-sm font-medium text-neutral-900 dark:text-neutral-100">NRP</th>
+                    <th class="px-4 py-3 text-left text-sm font-medium text-neutral-900 dark:text-neutral-100">Role</th>
                     <th class="px-4 py-3 text-left text-sm font-medium text-neutral-900 dark:text-neutral-100">Office</th>
                     <th class="px-4 py-3 text-left text-sm font-medium text-neutral-900 dark:text-neutral-100">Status</th>
                     <th class="px-4 py-3 text-left text-sm font-medium text-neutral-900 dark:text-neutral-100">Projects</th>
@@ -316,90 +461,94 @@ new class extends Component
             </thead>
             <tbody class="divide-y divide-neutral-200 dark:divide-neutral-700">
                 @forelse($users as $user)
-                    <tr class="@if(!$user->is_approved) bg-amber-50 dark:bg-amber-900/10 @endif">
+                    <tr wire:key="user-{{ $user->id }}" class="hover:bg-neutral-50 dark:hover:bg-neutral-800/50">
                         <td class="px-4 py-3">
                             <div class="flex items-center gap-3">
-                                <div class="flex h-10 w-10 items-center justify-center rounded-full bg-neutral-200 text-sm font-medium dark:bg-neutral-700">
+                                <div class="flex h-10 w-10 items-center justify-center rounded-full bg-blue-100 text-sm font-semibold text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
                                     {{ $user->initials() }}
                                 </div>
                                 <div>
-                                    <div class="font-medium text-neutral-900 dark:text-neutral-100">
-                                        {{ $user->name }}
-                                        @if($user->is_admin)
-                                            <flux:badge color="purple" size="sm">Admin</flux:badge>
-                                        @endif
-                                    </div>
-                                    <div class="text-sm text-neutral-600 dark:text-neutral-400">
-                                        {{ $user->email }}
-                                    </div>
+                                    <div class="font-medium text-neutral-900 dark:text-neutral-100">{{ $user->name }}</div>
+                                    <div class="text-sm text-neutral-500 dark:text-neutral-400">{{ $user->email }}</div>
                                 </div>
                             </div>
                         </td>
-                        <td class="px-4 py-3 text-sm text-neutral-900 dark:text-neutral-100">
+                        <td class="px-4 py-3 text-sm text-neutral-600 dark:text-neutral-400">
                             {{ $user->nrp ?? '-' }}
                         </td>
                         <td class="px-4 py-3 text-sm">
+                            @if($user->roles->count() > 0)
+                                <div class="flex flex-wrap gap-1">
+                                    @foreach($user->roles as $role)
+                                        <flux:badge size="sm">{{ $role->name }}</flux:badge>
+                                    @endforeach
+                                </div>
+                            @else
+                                <span class="text-neutral-400">No role</span>
+                            @endif
+                        </td>
+                        <td class="px-4 py-3 text-sm">
                             @if($user->office)
-                                <div class="font-medium text-neutral-900 dark:text-neutral-100">
-                                    {{ $user->office->name }}
-                                </div>
-                                <div class="text-xs text-neutral-500">
-                                    {{ $user->office->level->name }}
-                                    @if($user->office->parent)
-                                        - {{ $user->office->parent->name }}
-                                    @endif
-                                </div>
+                                <div class="text-neutral-900 dark:text-neutral-100">{{ $user->office->name }}</div>
+                                @if($user->office->parent)
+                                    <div class="text-xs text-neutral-500 dark:text-neutral-400">{{ $user->office->parent->name }}</div>
+                                @endif
                             @else
                                 <span class="text-neutral-400">-</span>
                             @endif
                         </td>
-                        <td class="px-4 py-3">
-                            @if($user->is_approved)
-                                <flux:badge color="green">Approved</flux:badge>
-                                @if($user->approvedBy)
-                                    <div class="mt-1 text-xs text-neutral-500">
-                                        by {{ $user->approvedBy->name }}
-                                    </div>
-                                @endif
-                            @else
-                                <flux:badge color="amber">Pending</flux:badge>
-                            @endif
-                        </td>
                         <td class="px-4 py-3 text-sm">
-                            @if($user->projects->count() > 0)
-                                <div class="flex flex-wrap gap-1">
-                                    @foreach($user->projects->take(2) as $project)
-                                        <flux:badge size="sm">{{ Str::limit($project->name, 15) }}</flux:badge>
-                                    @endforeach
-                                    @if($user->projects->count() > 2)
-                                        <flux:badge size="sm" color="zinc">+{{ $user->projects->count() - 2 }}</flux:badge>
-                                    @endif
-                                </div>
-                            @else
-                                <span class="text-neutral-400">No projects</span>
-                            @endif
+                            <div class="flex flex-col gap-1">
+                                @if($user->is_admin)
+                                    <flux:badge color="purple" size="sm">Admin</flux:badge>
+                                @endif
+                                @if($user->is_approved)
+                                    <flux:badge color="green" size="sm">Approved</flux:badge>
+                                @else
+                                    <flux:badge color="amber" size="sm">Pending</flux:badge>
+                                @endif
+                            </div>
                         </td>
                         <td class="px-4 py-3 text-sm text-neutral-600 dark:text-neutral-400">
-                            {{ $user->created_at->format('M d, Y') }}
+                            {{ $user->projects->count() }}
                         </td>
-                        <td class="px-4 py-3 text-right">
+                        <td class="px-4 py-3 text-sm text-neutral-600 dark:text-neutral-400">
+                            {{ $user->created_at->format('M j, Y') }}
+                        </td>
+                        <td class="px-4 py-3 text-right text-sm">
                             <div class="flex items-center justify-end gap-2">
                                 @if(!$user->is_approved)
-                                    <flux:button wire:click="approveUser({{ $user->id }})" size="sm" variant="primary">
+                                    <flux:button
+                                        wire:click="approveUser({{ $user->id }})"
+                                        wire:confirm="Approve this user?"
+                                        size="sm"
+                                        variant="primary"
+                                    >
                                         Approve
                                     </flux:button>
-                                    <flux:button wire:click="rejectUser({{ $user->id }})" size="sm" variant="danger">
+                                    <flux:button
+                                        wire:click="rejectUser({{ $user->id }})"
+                                        wire:confirm="Reject and delete this user?"
+                                        size="sm"
+                                        variant="danger"
+                                    >
                                         Reject
                                     </flux:button>
                                 @else
-                                    <flux:button wire:click="openProjectModal({{ $user->id }})" size="sm" variant="outline">
-                                        Projects
-                                    </flux:button>
-                                    <flux:button wire:click="editUser({{ $user->id }})" size="sm" variant="outline">
+                                    <flux:button wire:click="editUser({{ $user->id }})" size="sm" variant="ghost">
                                         Edit
                                     </flux:button>
+                                    <flux:button wire:click="openProjectModal({{ $user->id }})" size="sm" variant="ghost">
+                                        Projects
+                                    </flux:button>
                                     @if($user->id !== Auth::id())
-                                        <flux:button wire:click="deleteUser({{ $user->id }})" size="sm" variant="danger" wire:confirm="Are you sure you want to delete this user?">
+                                        <flux:button
+                                            wire:click="deleteUser({{ $user->id }})"
+                                            wire:confirm="Delete this user?"
+                                            size="sm"
+                                            variant="ghost"
+                                            class="text-red-600 hover:text-red-700"
+                                        >
                                             Delete
                                         </flux:button>
                                     @endif
@@ -409,7 +558,7 @@ new class extends Component
                     </tr>
                 @empty
                     <tr>
-                        <td colspan="7" class="px-4 py-12 text-center text-neutral-600 dark:text-neutral-400">
+                        <td colspan="8" class="px-4 py-8 text-center text-sm text-neutral-500">
                             No users found.
                         </td>
                     </tr>
@@ -420,33 +569,52 @@ new class extends Component
 
     <!-- Edit User Modal -->
     <flux:modal wire:model="showEditModal" class="min-w-[500px]">
-        <form wire:submit="saveUser" class="space-y-6">
+        <form wire:submit="saveUser" class="space-y-4">
             <flux:heading size="lg">Edit User</flux:heading>
 
-            <flux:input wire:model="editName" label="Name" type="text" required />
-            <flux:input wire:model="editEmail" label="Email" type="email" required />
-            <flux:input wire:model="editNrp" label="NRP" type="text" />
+            <flux:input
+                wire:model="editName"
+                label="Full Name"
+                type="text"
+                required
+            />
 
-            <flux:select wire:model="editOfficeId" label="Office">
-                <flux:select.option value="">No Office Assigned</flux:select.option>
-                @foreach($offices as $levelName => $levelOffices)
-                    <optgroup label="{{ $levelName }}">
-                        @foreach($levelOffices as $office)
-                            <flux:select.option value="{{ $office->id }}">
-                                {{ $office->name }}
-                                @if($office->parent)
-                                    ({{ $office->parent->name }})
-                                @endif
-                            </flux:select.option>
-                        @endforeach
-                    </optgroup>
-                @endforeach
-            </flux:select>
+            <flux:input
+                wire:model="editEmail"
+                label="Email Address"
+                type="email"
+                required
+            />
 
-            <flux:checkbox wire:model="editIsAdmin" label="Admin privileges" />
+            <flux:input
+                wire:model="editNrp"
+                label="NRP (Employee ID)"
+                type="text"
+            />
 
-            <div class="flex justify-end gap-3">
-                <flux:button wire:click="$set('showEditModal', false)" variant="outline">
+            <div>
+                <label class="mb-2 block text-sm font-medium text-neutral-900 dark:text-neutral-100">Office</label>
+                <flux:select wire:model="editOfficeId">
+                    <option value="">No office</option>
+                    @foreach($offices as $levelName => $levelOffices)
+                        <optgroup label="{{ $levelName }}">
+                            @foreach($levelOffices as $office)
+                                <option value="{{ $office->id }}">
+                                    {{ $office->name }}
+                                    @if($office->parent)
+                                        ({{ $office->parent->name }})
+                                    @endif
+                                </option>
+                            @endforeach
+                        </optgroup>
+                    @endforeach
+                </flux:select>
+            </div>
+
+            <flux:checkbox wire:model="editIsAdmin" label="Grant admin privileges" />
+
+            <div class="flex justify-end gap-3 pt-2">
+                <flux:button wire:click="$set('showEditModal', false)" variant="outline" type="button">
                     Cancel
                 </flux:button>
                 <flux:button type="submit" variant="primary">
@@ -457,32 +625,30 @@ new class extends Component
     </flux:modal>
 
     <!-- Project Assignment Modal -->
-    <flux:modal wire:model="showProjectModal" class="min-w-[600px]">
-        <div class="space-y-6">
+    <flux:modal wire:model="showProjectModal" class="min-w-[500px]">
+        <div class="space-y-4">
             <flux:heading size="lg">Assign Projects</flux:heading>
 
             <div class="max-h-96 space-y-2 overflow-y-auto">
                 @foreach($projects as $project)
-                    <label class="flex items-center gap-3 rounded-lg border border-neutral-200 p-3 hover:bg-neutral-50 dark:border-neutral-700 dark:hover:bg-neutral-800">
+                    <label class="flex cursor-pointer items-center gap-3 rounded-lg border border-neutral-200 p-3 hover:bg-neutral-50 dark:border-neutral-700 dark:hover:bg-neutral-800">
                         <input
                             type="checkbox"
                             wire:model="selectedProjects"
                             value="{{ $project->id }}"
-                            class="rounded border-neutral-300 dark:border-neutral-600"
+                            class="rounded border-neutral-300 text-blue-600 focus:ring-blue-500 dark:border-neutral-600"
                         />
                         <div class="flex-1">
-                            <div class="font-medium text-neutral-900 dark:text-neutral-100">
-                                {{ $project->name }}
-                            </div>
-                            <div class="text-sm text-neutral-600 dark:text-neutral-400">
-                                {{ $project->location->village_name }} ({{ $project->location->city_name }}) - {{ $project->partner->name }}
+                            <div class="font-medium text-neutral-900 dark:text-neutral-100">{{ $project->name }}</div>
+                            <div class="text-sm text-neutral-500 dark:text-neutral-400">
+                                {{ $project->location?->village_name ?? '-' }} • {{ $project->partner?->name ?? '-' }}
                             </div>
                         </div>
                     </label>
                 @endforeach
             </div>
 
-            <div class="flex justify-end gap-3">
+            <div class="flex justify-end gap-3 pt-2">
                 <flux:button wire:click="$set('showProjectModal', false)" variant="outline">
                     Cancel
                 </flux:button>
@@ -543,33 +709,39 @@ new class extends Component
             @enderror
 
             <flux:select
-                wire:model.live="createKodimId"
-                label="Kodim (District)"
+                wire:model.live="createRoleId"
+                label="Role"
                 required
             >
-                <flux:select.option value="">Select Kodim</flux:select.option>
-                @foreach ($kodims as $kodim)
-                    <flux:select.option value="{{ $kodim->id }}">
-                        {{ $kodim->name }}
+                <flux:select.option value="">Select Role</flux:select.option>
+                @foreach ($roles as $role)
+                    <flux:select.option value="{{ $role->id }}">
+                        {{ $role->name }}
+                        @if($role->office_level_id)
+                            - {{ \App\Models\OfficeLevel::find($role->office_level_id)->name ?? '' }}
+                        @endif
                     </flux:select.option>
                 @endforeach
             </flux:select>
-            @error('createKodimId')
+            @error('createRoleId')
                 <div class="-mt-2 text-sm text-red-600">{{ $message }}</div>
             @enderror
 
             <flux:select
                 wire:model="createOfficeId"
-                label="Koramil (Office)"
+                label="Office"
                 required
-                :disabled="!$createKodimId"
+                :disabled="!$createRoleId"
             >
                 <flux:select.option value="">
-                    {{ $createKodimId ? 'Select Koramil' : 'Select Kodim first' }}
+                    {{ $createRoleId ? 'Select Office' : 'Select Role first' }}
                 </flux:select.option>
-                @foreach ($koramils as $koramil)
-                    <flux:select.option value="{{ $koramil->id }}">
-                        {{ $koramil->name }}
+                @foreach ($availableOffices as $office)
+                    <flux:select.option value="{{ $office->id }}">
+                        {{ $office->name }}
+                        @if(isset($office->parent))
+                            ({{ $office->parent->name }})
+                        @endif
                     </flux:select.option>
                 @endforeach
             </flux:select>
