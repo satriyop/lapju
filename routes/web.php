@@ -18,7 +18,6 @@ Route::middleware(['auth', 'approved'])->group(function () {
     Volt::route('partners', 'partners.index')->name('partners.index');
     Volt::route('projects', 'projects.index')->name('projects.index');
     Volt::route('progress', 'progress.index')->name('progress.index');
-    Volt::route('locations', 'locations.index')->name('locations.index');
     Volt::route('calendar-progress', 'calendar-progress')->name('calendar-progress.index');
 
     Route::redirect('settings', 'settings/profile');
@@ -32,6 +31,7 @@ Route::middleware(['auth', 'approved'])->group(function () {
 Route::middleware(['auth', 'approved', 'admin'])->prefix('admin')->name('admin.')->group(function () {
     Volt::route('users', 'admin.users.index')->name('users.index');
     Volt::route('offices', 'offices')->name('offices.index');
+    Volt::route('locations', 'locations.index')->name('locations.index');
     Volt::route('roles', 'roles.index')->name('roles.index');
     Volt::route('settings', 'admin.settings.index')->name('settings.index');
     Volt::route('task-templates', 'admin.task-templates.index')->name('task-templates.index');

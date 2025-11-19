@@ -100,23 +100,28 @@ new class extends Component
                 ->get()
             : collect();
 
-        // Build office filter
-        $officeId = $this->koramilId ?? $this->kodimId ?? $this->koremId ?? $this->kodamId;
-
         // Get projects based on filters
         $projectsQuery = Project::with('location', 'partner')->orderBy('name');
 
-        if ($officeId) {
-            $projectsQuery->whereHas('location', function ($query) use ($officeId) {
-                $office = Office::find($officeId);
-                if ($office && $office->coverage_district) {
-                    $query->where('district_name', $office->coverage_district);
-                } elseif ($office && $office->coverage_city) {
-                    $query->where('city_name', $office->coverage_city);
-                } elseif ($office && $office->coverage_province) {
-                    $query->where('province_name', $office->coverage_province);
-                }
-            });
+        // Reporters can only see their assigned projects
+        if (auth()->user()->hasRole('Reporter')) {
+            $projectsQuery->whereHas('users', fn ($q) => $q->where('users.id', auth()->id()));
+        } else {
+            // Build office filter for non-reporters
+            $officeId = $this->koramilId ?? $this->kodimId ?? $this->koremId ?? $this->kodamId;
+
+            if ($officeId) {
+                $projectsQuery->whereHas('location', function ($query) use ($officeId) {
+                    $office = Office::find($officeId);
+                    if ($office && $office->coverage_district) {
+                        $query->where('district_name', $office->coverage_district);
+                    } elseif ($office && $office->coverage_city) {
+                        $query->where('city_name', $office->coverage_city);
+                    } elseif ($office && $office->coverage_province) {
+                        $query->where('province_name', $office->coverage_province);
+                    }
+                });
+            }
         }
 
         $projects = $projectsQuery->get();
@@ -195,59 +200,61 @@ new class extends Component
         <div class="text-sm text-neutral-400">{{ $currentDate }}</div>
     </div>
 
-    <!-- Office Hierarchy Filters -->
+    <!-- Filters -->
     <div class="grid grid-cols-1 gap-4 md:grid-cols-5">
-        <!-- Kodam -->
-        <div>
-            <label class="mb-2 block text-xs font-medium text-neutral-400">Kodam</label>
-            <flux:select wire:model.live="kodamId" class="bg-neutral-800 text-white">
-                <flux:select.option value="">All Kodam</flux:select.option>
-                @foreach($kodams as $kodam)
-                    <flux:select.option value="{{ $kodam->id }}">
-                        {{ $kodam->name }}
-                    </flux:select.option>
-                @endforeach
-            </flux:select>
-        </div>
+        @if(!auth()->user()->hasRole('Reporter'))
+            <!-- Kodam -->
+            <div>
+                <label class="mb-2 block text-xs font-medium text-neutral-400">Kodam</label>
+                <flux:select wire:model.live="kodamId" class="bg-neutral-800 text-white">
+                    <flux:select.option value="">All Kodam</flux:select.option>
+                    @foreach($kodams as $kodam)
+                        <flux:select.option value="{{ $kodam->id }}">
+                            {{ $kodam->name }}
+                        </flux:select.option>
+                    @endforeach
+                </flux:select>
+            </div>
 
-        <!-- Korem -->
-        <div>
-            <label class="mb-2 block text-xs font-medium text-neutral-400">Korem</label>
-            <flux:select wire:model.live="koremId" class="bg-neutral-800 text-white" :disabled="!$kodamId">
-                <flux:select.option value="">All Korem</flux:select.option>
-                @foreach($korems as $korem)
-                    <flux:select.option value="{{ $korem->id }}">
-                        {{ $korem->name }}
-                    </flux:select.option>
-                @endforeach
-            </flux:select>
-        </div>
+            <!-- Korem -->
+            <div>
+                <label class="mb-2 block text-xs font-medium text-neutral-400">Korem</label>
+                <flux:select wire:model.live="koremId" class="bg-neutral-800 text-white" :disabled="!$kodamId">
+                    <flux:select.option value="">All Korem</flux:select.option>
+                    @foreach($korems as $korem)
+                        <flux:select.option value="{{ $korem->id }}">
+                            {{ $korem->name }}
+                        </flux:select.option>
+                    @endforeach
+                </flux:select>
+            </div>
 
-        <!-- Kodim -->
-        <div>
-            <label class="mb-2 block text-xs font-medium text-neutral-400">Kodim</label>
-            <flux:select wire:model.live="kodimId" class="bg-neutral-800 text-white" :disabled="!$koremId">
-                <flux:select.option value="">All Kodim</flux:select.option>
-                @foreach($kodims as $kodim)
-                    <flux:select.option value="{{ $kodim->id }}">
-                        {{ $kodim->name }}
-                    </flux:select.option>
-                @endforeach
-            </flux:select>
-        </div>
+            <!-- Kodim -->
+            <div>
+                <label class="mb-2 block text-xs font-medium text-neutral-400">Kodim</label>
+                <flux:select wire:model.live="kodimId" class="bg-neutral-800 text-white" :disabled="!$koremId">
+                    <flux:select.option value="">All Kodim</flux:select.option>
+                    @foreach($kodims as $kodim)
+                        <flux:select.option value="{{ $kodim->id }}">
+                            {{ $kodim->name }}
+                        </flux:select.option>
+                    @endforeach
+                </flux:select>
+            </div>
 
-        <!-- Koramil -->
-        <div>
-            <label class="mb-2 block text-xs font-medium text-neutral-400">Koramil</label>
-            <flux:select wire:model.live="koramilId" class="bg-neutral-800 text-white" :disabled="!$kodimId">
-                <flux:select.option value="">{{ $kodimId ? 'All Koramil' : 'Select Kodim first' }}</flux:select.option>
-                @foreach($koramils as $koramil)
-                    <flux:select.option value="{{ $koramil->id }}">
-                        {{ $koramil->name }}
-                    </flux:select.option>
-                @endforeach
-            </flux:select>
-        </div>
+            <!-- Koramil -->
+            <div>
+                <label class="mb-2 block text-xs font-medium text-neutral-400">Koramil</label>
+                <flux:select wire:model.live="koramilId" class="bg-neutral-800 text-white" :disabled="!$kodimId">
+                    <flux:select.option value="">{{ $kodimId ? 'All Koramil' : 'Select Kodim first' }}</flux:select.option>
+                    @foreach($koramils as $koramil)
+                        <flux:select.option value="{{ $koramil->id }}">
+                            {{ $koramil->name }}
+                        </flux:select.option>
+                    @endforeach
+                </flux:select>
+            </div>
+        @endif
 
         <!-- Project -->
         <div>
