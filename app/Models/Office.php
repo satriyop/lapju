@@ -22,6 +22,9 @@ class Office extends Model
         'name',
         'code',
         'notes',
+        'coverage_province',
+        'coverage_city',
+        'coverage_district',
         '_lft',
         '_rgt',
     ];

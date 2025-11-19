@@ -36,8 +36,11 @@ new class extends Component
             $this->selectedProjectId = $firstProject->id;
             $this->loadProgressData();
 
-            // Auto-select first root task tab
-            $rootTasks = Task::whereNull('parent_id')->orderBy('_lft')->get();
+            // Auto-select first root task tab for the selected project
+            $rootTasks = Task::where('project_id', $this->selectedProjectId)
+                ->whereNull('parent_id')
+                ->orderBy('_lft')
+                ->get();
             if ($rootTasks->isNotEmpty()) {
                 $this->activeTab = $rootTasks->first()->id;
             }
@@ -153,10 +156,15 @@ new class extends Component
     {
         $this->loadProgressData();
 
-        // Reset to first tab when project changes
-        $rootTasks = Task::whereNull('parent_id')->orderBy('_lft')->get();
-        if ($rootTasks->isNotEmpty()) {
-            $this->activeTab = $rootTasks->first()->id;
+        // Reset to first tab when project changes - filter by selected project
+        if ($this->selectedProjectId) {
+            $rootTasks = Task::where('project_id', $this->selectedProjectId)
+                ->whereNull('parent_id')
+                ->orderBy('_lft')
+                ->get();
+            if ($rootTasks->isNotEmpty()) {
+                $this->activeTab = $rootTasks->first()->id;
+            }
         }
     }
 
@@ -234,11 +242,22 @@ new class extends Component
     public function with(): array
     {
         $projects = Project::with('location', 'partner')->orderBy('name')->get();
-        $rootTasks = Task::whereNull('parent_id')->orderBy('_lft')->get();
 
-        $allTasks = Task::with(['parent:id,name', 'children:id,parent_id'])
-            ->orderBy('_lft')
-            ->get();
+        // Filter tasks by selected project
+        $rootTasks = collect();
+        $allTasks = collect();
+
+        if ($this->selectedProjectId) {
+            $rootTasks = Task::where('project_id', $this->selectedProjectId)
+                ->whereNull('parent_id')
+                ->orderBy('_lft')
+                ->get();
+
+            $allTasks = Task::where('project_id', $this->selectedProjectId)
+                ->with(['parent:id,name', 'children:id,parent_id'])
+                ->orderBy('_lft')
+                ->get();
+        }
 
         // Get latest progress for all tasks
         $latestProgressMap = $this->getLatestProgressMap();
@@ -274,7 +293,7 @@ new class extends Component
                     <option value="">Select Project...</option>
                     @foreach($projects as $project)
                         <option value="{{ $project->id }}">
-                            {{ $project->location->city_name }} - {{ Str::limit($project->partner->name, 30) }}
+                            {{ $project->name }} - {{ Str::limit($project->partner->name, 30) }}
                         </option>
                     @endforeach
                 </flux:select>

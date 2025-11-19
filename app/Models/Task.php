@@ -11,6 +11,8 @@ class Task extends Model
     use HasFactory;
 
     protected $fillable = [
+        'project_id',
+        'template_task_id',
         'name',
         'volume',
         'unit',
@@ -55,5 +57,15 @@ class Task extends Model
     public function progress(): \Illuminate\Database\Eloquent\Relations\HasMany
     {
         return $this->hasMany(TaskProgress::class);
+    }
+
+    public function project(): \Illuminate\Database\Eloquent\Relations\BelongsTo
+    {
+        return $this->belongsTo(Project::class);
+    }
+
+    public function template(): \Illuminate\Database\Eloquent\Relations\BelongsTo
+    {
+        return $this->belongsTo(TaskTemplate::class, 'template_task_id');
     }
 }

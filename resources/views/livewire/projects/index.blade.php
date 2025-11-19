@@ -1,11 +1,13 @@
 <?php
 
-use App\Models\Partner;
 use App\Models\Location;
+use App\Models\Office;
+use App\Models\Partner;
 use App\Models\Project;
 use Livewire\Volt\Component;
 use Livewire\WithPagination;
-use function Livewire\Volt\{layout};
+
+use function Livewire\Volt\layout;
 
 layout('components.layouts.app');
 
@@ -23,6 +25,10 @@ new class extends Component
 
     public ?int $partnerId = null;
 
+    public ?int $kodimId = null;
+
+    public ?int $koramilId = null;
+
     public ?int $locationId = null;
 
     public ?string $startDate = null;
@@ -33,30 +39,78 @@ new class extends Component
 
     public bool $showModal = false;
 
+    public function isReporter(): bool
+    {
+        return auth()->user()->hasRole('Reporter');
+    }
+
     public function with(): array
     {
         $projects = Project::query()
-            ->with(['partner', 'location'])
+            ->with(['partner', 'location', 'office'])
             ->when($this->search, fn ($query) => $query->where('name', 'like', "%{$this->search}%"))
             ->orderBy('name')
             ->paginate(20);
 
         $partners = Partner::orderBy('name')->get();
-        $locations = Location::orderBy('province_name')->orderBy('city_name')->orderBy('village_name')->get();
+
+        // Get Kodims
+        $kodims = Office::whereHas('level', fn ($q) => $q->where('level', 3))
+            ->orderBy('name')
+            ->get();
+
+        // Get Koramils filtered by selected Kodim
+        $koramils = Office::whereHas('level', fn ($q) => $q->where('level', 4))
+            ->when($this->kodimId, fn ($q) => $q->where('parent_id', $this->kodimId))
+            ->orderBy('name')
+            ->get();
+
+        // Get Locations filtered by selected Koramil's coverage
+        $locations = Location::query();
+        if ($this->koramilId) {
+            $koramil = Office::find($this->koramilId);
+            if ($koramil) {
+                if ($koramil->coverage_district) {
+                    $locations->where('district_name', $koramil->coverage_district);
+                } elseif ($koramil->coverage_city) {
+                    $locations->where('city_name', $koramil->coverage_city);
+                }
+            }
+        }
+        $locations = $locations->orderBy('city_name')->orderBy('village_name')->get();
 
         return [
             'projects' => $projects,
             'partners' => $partners,
+            'kodims' => $kodims,
+            'koramils' => $koramils,
             'locations' => $locations,
         ];
     }
 
     public function create(): void
     {
-        $this->reset(['editingId', 'name', 'description', 'partnerId', 'locationId', 'startDate', 'endDate', 'status']);
+        $this->reset(['editingId', 'name', 'description', 'partnerId', 'kodimId', 'koramilId', 'locationId', 'startDate', 'endDate', 'status']);
         $this->status = 'planning';
         $this->startDate = '2025-11-01';
         $this->endDate = '2026-01-31';
+
+        // For reporters, default to their office
+        $user = auth()->user();
+        if ($user && $user->office) {
+            $office = $user->office;
+
+            // If user's office is a Koramil (level 4)
+            if ($office->level && $office->level->level == 4) {
+                $this->koramilId = $office->id;
+                $this->kodimId = $office->parent_id;
+            }
+            // If user's office is a Kodim (level 3)
+            elseif ($office->level && $office->level->level == 3) {
+                $this->kodimId = $office->id;
+            }
+        }
+
         $this->showModal = true;
     }
 
@@ -71,15 +125,74 @@ new class extends Component
         $this->startDate = $project->start_date?->format('Y-m-d');
         $this->endDate = $project->end_date?->format('Y-m-d');
         $this->status = $project->status;
+
+        // Load office hierarchy
+        if ($project->office) {
+            $this->koramilId = $project->office_id;
+            if ($project->office->parent_id) {
+                $this->kodimId = $project->office->parent_id;
+            }
+        }
+
         $this->showModal = true;
+    }
+
+    public function updatedKodimId(): void
+    {
+        // Reporters cannot change office hierarchy
+        if ($this->isReporter()) {
+            return;
+        }
+
+        // Reset Koramil and Location when Kodim changes
+        $this->koramilId = null;
+        $this->locationId = null;
+    }
+
+    public function updatedKoramilId(): void
+    {
+        // Reporters cannot change office hierarchy
+        if ($this->isReporter()) {
+            return;
+        }
+
+        // Reset Location when Koramil changes
+        $this->locationId = null;
+    }
+
+    public function updatedLocationId(): void
+    {
+        // Auto-populate project name when location is selected
+        if ($this->locationId) {
+            $location = Location::find($this->locationId);
+            if ($location) {
+                $this->name = 'Koperasi Merah Putih '.$location->village_name;
+            }
+        }
     }
 
     public function save(): void
     {
+        // For reporters, ensure office values match their assigned office
+        if ($this->isReporter()) {
+            $user = auth()->user();
+            $office = $user->office;
+
+            if ($office->level && $office->level->level == 4) {
+                // Koramil level - enforce their koramil
+                $this->koramilId = $office->id;
+                $this->kodimId = $office->parent_id;
+            } elseif ($office->level && $office->level->level == 3) {
+                // Kodim level - enforce their kodim
+                $this->kodimId = $office->id;
+            }
+        }
+
         $validated = $this->validate([
             'name' => ['required', 'string', 'max:255'],
             'description' => ['nullable', 'string'],
             'partnerId' => ['required', 'exists:partners,id'],
+            'koramilId' => ['required', 'exists:offices,id'],
             'locationId' => ['required', 'exists:locations,id'],
             'startDate' => ['nullable', 'date'],
             'endDate' => ['nullable', 'date', 'after_or_equal:startDate'],
@@ -90,6 +203,7 @@ new class extends Component
             'name' => $validated['name'],
             'description' => $validated['description'] ?: null,
             'partner_id' => $validated['partnerId'],
+            'office_id' => $validated['koramilId'],
             'location_id' => $validated['locationId'],
             'start_date' => $validated['startDate'],
             'end_date' => $validated['endDate'],
@@ -97,12 +211,20 @@ new class extends Component
         ];
 
         if ($this->editingId) {
-            Project::findOrFail($this->editingId)->update($data);
+            $project = Project::findOrFail($this->editingId);
+            $project->update($data);
         } else {
-            Project::create($data);
+            $project = Project::create($data);
+
+            // Attach current user as reporter
+            $project->users()->attach(auth()->id(), [
+                'role' => 'reporter',
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
         }
 
-        $this->reset(['showModal', 'editingId', 'name', 'description', 'partnerId', 'locationId', 'startDate', 'endDate', 'status']);
+        $this->reset(['showModal', 'editingId', 'name', 'description', 'partnerId', 'kodimId', 'koramilId', 'locationId', 'startDate', 'endDate', 'status']);
         $this->dispatch('project-saved');
     }
 
@@ -114,7 +236,7 @@ new class extends Component
 
     public function cancelEdit(): void
     {
-        $this->reset(['showModal', 'editingId', 'name', 'description', 'partnerId', 'locationId', 'startDate', 'endDate', 'status']);
+        $this->reset(['showModal', 'editingId', 'name', 'description', 'partnerId', 'kodimId', 'koramilId', 'locationId', 'startDate', 'endDate', 'status']);
     }
 
     public function updatedSearch(): void
@@ -145,6 +267,7 @@ new class extends Component
                 <tr>
                     <th class="px-4 py-3 text-left text-sm font-semibold">Name</th>
                     <th class="px-4 py-3 text-left text-sm font-semibold">Partner</th>
+                    <th class="px-4 py-3 text-left text-sm font-semibold">Office</th>
                     <th class="px-4 py-3 text-left text-sm font-semibold">Location</th>
                     <th class="px-4 py-3 text-left text-sm font-semibold">Status</th>
                     <th class="px-4 py-3 text-left text-sm font-semibold">Start Date</th>
@@ -158,9 +281,10 @@ new class extends Component
                         class="hover:bg-neutral-50 dark:hover:bg-neutral-800/50">
                         <td class="px-4 py-3 text-sm font-medium">{{ $project->name }}</td>
                         <td class="px-4 py-3 text-sm">{{ $project->partner->name }}</td>
+                        <td class="px-4 py-3 text-sm">{{ $project->office?->name ?? '-' }}</td>
                         <td class="px-4 py-3 text-sm">
                             <div class="font-medium">{{ $project->location->village_name }}</div>
-                            <div class="text-xs text-neutral-500">{{ $project->location->city_name }}, {{ $project->location->province_name }}</div>
+                            <div class="text-xs text-neutral-500">{{ $project->location->district_name }}</div>
                         </td>
                         <td class="px-4 py-3 text-sm">
                             <span class="inline-flex items-center rounded-full px-2 py-1 text-xs font-medium
@@ -193,7 +317,7 @@ new class extends Component
                     </tr>
                 @empty
                     <tr>
-                        <td colspan="7" class="px-4 py-8 text-center text-sm text-neutral-500">
+                        <td colspan="8" class="px-4 py-8 text-center text-sm text-neutral-500">
                             No projects found.
                         </td>
                     </tr>
@@ -210,37 +334,59 @@ new class extends Component
         <form wire:submit="save" class="space-y-6">
             <flux:heading size="lg">{{ $editingId ? 'Edit Project' : 'Create Project' }}</flux:heading>
 
-            <flux:input
-                wire:model="name"
-                label="Project Name"
-                type="text"
-                required
-                autofocus
-            />
+            <flux:select wire:model="partnerId" label="Partner" required>
+                <option value="">Select partner...</option>
+                @foreach($partners as $partner)
+                    <option value="{{ $partner->id }}">{{ $partner->name }}</option>
+                @endforeach
+            </flux:select>
 
-            <flux:textarea
-                wire:model="description"
-                label="Description"
-                rows="3"
-            />
+            @if($this->isReporter())
+                {{-- Read-only office fields for reporters --}}
+                <div class="grid grid-cols-2 gap-4">
+                    <flux:input
+                        label="Kodim"
+                        type="text"
+                        :value="$kodims->firstWhere('id', $kodimId)?->name ?? ''"
+                        readonly
+                        disabled
+                    />
 
-            <div class="grid grid-cols-2 gap-4">
-                <flux:select wire:model="partnerId" label="Partner" required>
-                    <option value="">Select partner...</option>
-                    @foreach($partners as $partner)
-                        <option value="{{ $partner->id }}">{{ $partner->name }}</option>
-                    @endforeach
-                </flux:select>
+                    <flux:input
+                        label="Koramil"
+                        type="text"
+                        :value="$koramils->firstWhere('id', $koramilId)?->name ?? ''"
+                        readonly
+                        disabled
+                    />
+                </div>
+            @else
+                {{-- Editable office fields for non-reporters --}}
+                <div class="grid grid-cols-2 gap-4">
+                    <flux:select wire:model.live="kodimId" label="Kodim" required>
+                        <option value="">Select Kodim...</option>
+                        @foreach($kodims as $kodim)
+                            <option value="{{ $kodim->id }}">{{ $kodim->name }}</option>
+                        @endforeach
+                    </flux:select>
 
-                <flux:select wire:model="locationId" label="Location" required>
-                    <option value="">Select location...</option>
-                    @foreach($locations as $location)
-                        <option value="{{ $location->id }}">
-                            {{ $location->village_name }} ({{ $location->city_name }})
-                        </option>
-                    @endforeach
-                </flux:select>
-            </div>
+                    <flux:select wire:model.live="koramilId" label="Koramil" required>
+                        <option value="">Select Koramil...</option>
+                        @foreach($koramils as $koramil)
+                            <option value="{{ $koramil->id }}">{{ $koramil->name }}</option>
+                        @endforeach
+                    </flux:select>
+                </div>
+            @endif
+
+            <flux:select wire:model.live="locationId" label="Location" required>
+                <option value="">Select location...</option>
+                @foreach($locations as $location)
+                    <option value="{{ $location->id }}">
+                        {{ $location->village_name }} - {{ $location->district_name }}
+                    </option>
+                @endforeach
+            </flux:select>
 
             <div class="grid grid-cols-2 gap-4">
                 <flux:input
@@ -255,6 +401,19 @@ new class extends Component
                     type="date"
                 />
             </div>
+
+            <flux:input
+                wire:model="name"
+                label="Project Name"
+                type="text"
+                required
+            />
+
+            <flux:textarea
+                wire:model="description"
+                label="Description"
+                rows="3"
+            />
 
             <flux:select wire:model="status" label="Status" required>
                 <option value="planning">Planning</option>

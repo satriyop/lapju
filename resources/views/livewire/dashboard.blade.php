@@ -4,8 +4,10 @@ use App\Models\Location;
 use App\Models\Office;
 use App\Models\OfficeLevel;
 use App\Models\Project;
+use App\Models\Role;
 use App\Models\Task;
 use App\Models\TaskProgress;
+use App\Models\User;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
 use Livewire\Volt\Component;
@@ -40,6 +42,35 @@ new class extends Component
 
     public function mount(): void
     {
+        // Reporters don't use office filters - just their assigned projects
+        if (auth()->user()->hasRole('Reporter')) {
+            // Auto-select first project assigned to this reporter
+            $firstProject = auth()->user()->projects()->first();
+            if ($firstProject) {
+                $this->selectedProjectId = $firstProject->id;
+                $this->setProjectDates();
+            }
+
+            return;
+        }
+
+        // Set default filters to Kodam IV and Korem 074 for non-reporters
+        $kodamIV = Office::whereHas('level', fn ($q) => $q->where('level', 1))
+            ->where('name', 'like', '%Kodam IV%')
+            ->first();
+
+        $korem074 = Office::whereHas('level', fn ($q) => $q->where('level', 2))
+            ->where('name', 'like', '%074%')
+            ->first();
+
+        if ($kodamIV) {
+            $this->selectedKodamId = $kodamIV->id;
+        }
+
+        if ($korem074) {
+            $this->selectedKoremId = $korem074->id;
+        }
+
         // Auto-select first project
         $firstProject = Project::first();
         if ($firstProject) {
@@ -154,6 +185,13 @@ new class extends Component
     {
         $query = Project::with('location', 'partner', 'office');
 
+        // Reporters can only see their assigned projects
+        if (auth()->user()->hasRole('Reporter')) {
+            $query->whereHas('users', fn ($q) => $q->where('users.id', auth()->id()));
+
+            return $query->orderBy('name')->get();
+        }
+
         // Filter by the lowest selected office level
         if ($this->selectedKoramilId) {
             // Filter by specific Koramil
@@ -181,6 +219,41 @@ new class extends Component
         }
 
         return $query->orderBy('name')->get();
+    }
+
+    public function getFilteredLocations()
+    {
+        $query = Location::query();
+
+        // Only filter locations when Kodim or Koramil is selected
+        // (projects are assigned to Koramils, so location filter should match)
+        $selectedOffice = null;
+
+        if ($this->selectedKoramilId) {
+            $selectedOffice = Office::with('level')->find($this->selectedKoramilId);
+        } elseif ($this->selectedKodimId) {
+            $selectedOffice = Office::with('level')->find($this->selectedKodimId);
+        }
+
+        // Filter locations based on office level and coverage
+        if ($selectedOffice) {
+            $level = $selectedOffice->level->level;
+
+            // Level 4 (Koramil) - filter by district if available, otherwise by city
+            if ($level == 4) {
+                if ($selectedOffice->coverage_district) {
+                    $query->where('district_name', $selectedOffice->coverage_district);
+                } elseif ($selectedOffice->coverage_city) {
+                    $query->where('city_name', $selectedOffice->coverage_city);
+                }
+            }
+            // Level 3 (Kodim) - filter by city
+            elseif ($level == 3 && $selectedOffice->coverage_city) {
+                $query->where('city_name', $selectedOffice->coverage_city);
+            }
+        }
+
+        return $query->orderBy('city_name')->orderBy('village_name')->get();
     }
 
     public function calculateSCurveData(): array
@@ -256,8 +329,10 @@ new class extends Component
 
     private function calculateActualProgress(Carbon $date): float
     {
-        // Get all leaf tasks (tasks with no children) and their weights
-        $leafTasks = Task::whereDoesntHave('children')->get();
+        // Get all leaf tasks for the selected project and their weights
+        $leafTasks = Task::where('project_id', $this->selectedProjectId)
+            ->whereDoesntHave('children')
+            ->get();
 
         if ($leafTasks->isEmpty()) {
             return 0;
@@ -378,7 +453,7 @@ new class extends Component
     public function with(): array
     {
         $projects = $this->getFilteredProjects();
-        $locations = Location::orderBy('city_name')->get();
+        $locations = $this->getFilteredLocations();
 
         // Get office levels
         $kodamLevel = OfficeLevel::where('level', 1)->first();
@@ -448,18 +523,25 @@ new class extends Component
         // Group task progress by root task
         $taskProgressByRoot = $this->groupTasksByRoot($taskProgress);
 
-        // Calculate statistics - count only leaf tasks (tasks with no children)
-        $totalLeafTasks = Task::whereDoesntHave('children')->count();
-        $tasksWithProgress = $taskProgress->count();
-        $averageProgress = $taskProgress->avg('percentage') ?? 0;
-        $completedTasks = $taskProgress->filter(fn ($t) => $t['percentage'] >= 100)->count();
+        // Calculate statistics - new dashboard metrics
+        $totalProjects = Project::count();
+
+        // Active projects: projects that have progress records
+        $activeProjects = Project::whereHas('progress')->distinct()->count();
+
+        $totalLocations = Location::count();
+
+        // Reporters: users with Reporter role
+        $reporterRole = Role::where('name', 'Reporter')->first();
+        $totalReporters = $reporterRole
+            ? User::whereHas('roles', fn ($q) => $q->where('role_id', $reporterRole->id))->count()
+            : 0;
 
         $stats = [
-            'total_tasks' => $totalLeafTasks,
-            'tasks_with_progress' => $tasksWithProgress,
-            'average_progress' => round($averageProgress, 2),
-            'completed_tasks' => $completedTasks,
-            'completion_rate' => $totalLeafTasks > 0 ? round(($completedTasks / $totalLeafTasks) * 100, 2) : 0,
+            'total_projects' => $totalProjects,
+            'active_projects' => $activeProjects,
+            'total_locations' => $totalLocations,
+            'total_reporters' => $totalReporters,
         ];
 
         // Calculate hierarchical progress (month -> week -> day)
@@ -511,8 +593,9 @@ new class extends Component
             return [];
         }
 
-        // Get all leaf tasks
-        $leafTasks = Task::whereDoesntHave('children')
+        // Get all leaf tasks for the selected project
+        $leafTasks = Task::where('project_id', $this->selectedProjectId)
+            ->whereDoesntHave('children')
             ->with('parent')
             ->orderBy('_lft')
             ->get();
@@ -645,55 +728,57 @@ new class extends Component
 
         <!-- Filters -->
         <div class="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-            <!-- Kodam Filter -->
-            <flux:select wire:model.live="selectedKodamId" label="Kodam">
-                <option value="">All Kodam</option>
-                @foreach($kodams as $kodam)
-                    <option value="{{ $kodam->id }}">
-                        {{ $kodam->name }}
-                    </option>
-                @endforeach
-            </flux:select>
+            @if(!auth()->user()->hasRole('Reporter'))
+                <!-- Kodam Filter -->
+                <flux:select wire:model.live="selectedKodamId" label="Kodam">
+                    <option value="">All Kodam</option>
+                    @foreach($kodams as $kodam)
+                        <option value="{{ $kodam->id }}">
+                            {{ $kodam->name }}
+                        </option>
+                    @endforeach
+                </flux:select>
 
-            <!-- Korem Filter (enabled only if Kodam is selected) -->
-            <flux:select wire:model.live="selectedKoremId" label="Korem" :disabled="!$this->selectedKodamId">
-                <option value="">{{ $this->selectedKodamId ? 'Select Korem...' : 'Select Kodam first' }}</option>
-                @foreach($korems as $korem)
-                    <option value="{{ $korem->id }}">
-                        {{ $korem->name }}
-                    </option>
-                @endforeach
-            </flux:select>
+                <!-- Korem Filter (enabled only if Kodam is selected) -->
+                <flux:select wire:model.live="selectedKoremId" label="Korem" :disabled="!$this->selectedKodamId">
+                    <option value="">{{ $this->selectedKodamId ? 'Select Korem...' : 'Select Kodam first' }}</option>
+                    @foreach($korems as $korem)
+                        <option value="{{ $korem->id }}">
+                            {{ $korem->name }}
+                        </option>
+                    @endforeach
+                </flux:select>
 
-            <!-- Kodim Filter (enabled only if Korem is selected) -->
-            <flux:select wire:model.live="selectedKodimId" label="Kodim" :disabled="!$this->selectedKoremId">
-                <option value="">{{ $this->selectedKoremId ? 'Select Kodim...' : 'Select Korem first' }}</option>
-                @foreach($kodims as $kodim)
-                    <option value="{{ $kodim->id }}">
-                        {{ $kodim->name }}
-                    </option>
-                @endforeach
-            </flux:select>
+                <!-- Kodim Filter (enabled only if Korem is selected) -->
+                <flux:select wire:model.live="selectedKodimId" label="Kodim" :disabled="!$this->selectedKoremId">
+                    <option value="">{{ $this->selectedKoremId ? 'Select Kodim...' : 'Select Korem first' }}</option>
+                    @foreach($kodims as $kodim)
+                        <option value="{{ $kodim->id }}">
+                            {{ $kodim->name }}
+                        </option>
+                    @endforeach
+                </flux:select>
 
-            <!-- Koramil Filter (enabled only if Kodim is selected) -->
-            <flux:select wire:model.live="selectedKoramilId" label="Koramil" :disabled="!$this->selectedKodimId">
-                <option value="">{{ $this->selectedKodimId ? 'All Koramil' : 'Select Kodim first' }}</option>
-                @foreach($koramils as $koramil)
-                    <option value="{{ $koramil->id }}">
-                        {{ $koramil->name }}
-                    </option>
-                @endforeach
-            </flux:select>
+                <!-- Koramil Filter (enabled only if Kodim is selected) -->
+                <flux:select wire:model.live="selectedKoramilId" label="Koramil" :disabled="!$this->selectedKodimId">
+                    <option value="">{{ $this->selectedKodimId ? 'All Koramil' : 'Select Kodim first' }}</option>
+                    @foreach($koramils as $koramil)
+                        <option value="{{ $koramil->id }}">
+                            {{ $koramil->name }}
+                        </option>
+                    @endforeach
+                </flux:select>
 
-            <!-- Location Filter -->
-            <flux:select wire:model.live="selectedLocationId" label="Location">
-                <option value="">All Locations</option>
-                @foreach($locations as $location)
-                    <option value="{{ $location->id }}">
-                        {{ $location->city_name }}
-                    </option>
-                @endforeach
-            </flux:select>
+                <!-- Location Filter -->
+                <flux:select wire:model.live="selectedLocationId" label="Location">
+                    <option value="">All Locations</option>
+                    @foreach($locations as $location)
+                        <option value="{{ $location->id }}">
+                            {{ $location->village_name }} - {{ $location->district_name }}
+                        </option>
+                    @endforeach
+                </flux:select>
+            @endif
 
             <!-- Project Filter -->
             <flux:select wire:model.live="selectedProjectId" label="Project">
@@ -710,35 +795,35 @@ new class extends Component
             <!-- Statistics Cards -->
             <div class="grid gap-4 md:grid-cols-4">
                 <div class="rounded-xl border border-neutral-200 bg-white p-6 dark:border-neutral-700 dark:bg-neutral-900">
-                    <div class="text-sm font-medium text-neutral-600 dark:text-neutral-400">Total Leaf Tasks</div>
+                    <div class="text-sm font-medium text-neutral-600 dark:text-neutral-400">Projects</div>
                     <div class="mt-2 text-3xl font-bold text-neutral-900 dark:text-neutral-100">
-                        {{ number_format($stats['total_tasks']) }}
+                        {{ number_format($stats['total_projects']) }}
                     </div>
-                    <div class="mt-1 text-xs text-neutral-500">Work items to track</div>
+                    <div class="mt-1 text-xs text-neutral-500">Total projects in system</div>
                 </div>
 
                 <div class="rounded-xl border border-neutral-200 bg-white p-6 dark:border-neutral-700 dark:bg-neutral-900">
-                    <div class="text-sm font-medium text-neutral-600 dark:text-neutral-400">Tasks with Progress</div>
+                    <div class="text-sm font-medium text-neutral-600 dark:text-neutral-400">Active Projects</div>
                     <div class="mt-2 text-3xl font-bold text-blue-600 dark:text-blue-400">
-                        {{ number_format($stats['tasks_with_progress']) }}
+                        {{ number_format($stats['active_projects']) }}
                     </div>
-                    <div class="mt-1 text-xs text-neutral-500">Work items started</div>
+                    <div class="mt-1 text-xs text-neutral-500">Projects with progress</div>
                 </div>
 
                 <div class="rounded-xl border border-neutral-200 bg-white p-6 dark:border-neutral-700 dark:bg-neutral-900">
-                    <div class="text-sm font-medium text-neutral-600 dark:text-neutral-400">Average Progress</div>
+                    <div class="text-sm font-medium text-neutral-600 dark:text-neutral-400">Locations</div>
                     <div class="mt-2 text-3xl font-bold text-green-600 dark:text-green-400">
-                        {{ number_format($stats['average_progress'], 1) }}%
+                        {{ number_format($stats['total_locations']) }}
                     </div>
-                    <div class="mt-1 text-xs text-neutral-500">Mean completion per task</div>
+                    <div class="mt-1 text-xs text-neutral-500">Available project locations</div>
                 </div>
 
                 <div class="rounded-xl border border-neutral-200 bg-white p-6 dark:border-neutral-700 dark:bg-neutral-900">
-                    <div class="text-sm font-medium text-neutral-600 dark:text-neutral-400">Completion Rate</div>
+                    <div class="text-sm font-medium text-neutral-600 dark:text-neutral-400">Reporters</div>
                     <div class="mt-2 text-3xl font-bold text-purple-600 dark:text-purple-400">
-                        {{ number_format($stats['completion_rate'], 1) }}%
+                        {{ number_format($stats['total_reporters']) }}
                     </div>
-                    <div class="mt-1 text-xs text-neutral-500">Tasks 100% complete</div>
+                    <div class="mt-1 text-xs text-neutral-500">Users with reporter role</div>
                 </div>
             </div>
 

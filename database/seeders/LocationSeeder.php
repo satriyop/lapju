@@ -12,193 +12,75 @@ class LocationSeeder extends Seeder
      */
     public function run(): void
     {
-        // Central Java (Jawa Tengah) locations - specific cities only
-        $locations = [
-            // Surakarta
-            [
-                'village_name' => 'Jebres',
-                'city_name' => 'Surakarta',
-                'province_name' => 'Jawa Tengah',
-                'notes' => 'Kelurahan di Kecamatan Jebres',
-            ],
-            [
-                'village_name' => 'Mojosongo',
-                'city_name' => 'Surakarta',
-                'province_name' => 'Jawa Tengah',
-                'notes' => 'Kelurahan di Kecamatan Jebres',
-            ],
-            [
-                'village_name' => 'Serengan',
-                'city_name' => 'Surakarta',
-                'province_name' => 'Jawa Tengah',
-                'notes' => 'Kelurahan di Kecamatan Serengan',
-            ],
-            [
-                'village_name' => 'Laweyan',
-                'city_name' => 'Surakarta',
-                'province_name' => 'Jawa Tengah',
-                'notes' => 'Kelurahan di Kecamatan Laweyan',
-            ],
+        $csvFile = database_path('seeders/data/locations_export.csv');
 
-            // Sukoharjo
-            [
-                'village_name' => 'Kartasura',
-                'city_name' => 'Sukoharjo',
-                'province_name' => 'Jawa Tengah',
-                'notes' => 'Kecamatan Kartasura',
-            ],
-            [
-                'village_name' => 'Grogol',
-                'city_name' => 'Sukoharjo',
-                'province_name' => 'Jawa Tengah',
-                'notes' => 'Kecamatan Grogol',
-            ],
-            [
-                'village_name' => 'Baki',
-                'city_name' => 'Sukoharjo',
-                'province_name' => 'Jawa Tengah',
-                'notes' => 'Kecamatan Baki',
-            ],
-            [
-                'village_name' => 'Gatak',
-                'city_name' => 'Sukoharjo',
-                'province_name' => 'Jawa Tengah',
-                'notes' => 'Kecamatan Gatak',
-            ],
+        if (! file_exists($csvFile)) {
+            $this->command->error('CSV file not found: '.$csvFile);
 
-            // Karanganyar
-            [
-                'village_name' => 'Karanganyar',
-                'city_name' => 'Karanganyar',
-                'province_name' => 'Jawa Tengah',
-                'notes' => 'Kecamatan Karanganyar',
-            ],
-            [
-                'village_name' => 'Tawangmangu',
-                'city_name' => 'Karanganyar',
-                'province_name' => 'Jawa Tengah',
-                'notes' => 'Kecamatan Tawangmangu',
-            ],
-            [
-                'village_name' => 'Jaten',
-                'city_name' => 'Karanganyar',
-                'province_name' => 'Jawa Tengah',
-                'notes' => 'Kecamatan Jaten',
-            ],
-            [
-                'village_name' => 'Gondangrejo',
-                'city_name' => 'Karanganyar',
-                'province_name' => 'Jawa Tengah',
-                'notes' => 'Kecamatan Gondangrejo',
-            ],
-
-            // Sragen
-            [
-                'village_name' => 'Sragen',
-                'city_name' => 'Sragen',
-                'province_name' => 'Jawa Tengah',
-                'notes' => 'Kecamatan Sragen',
-            ],
-            [
-                'village_name' => 'Gemolong',
-                'city_name' => 'Sragen',
-                'province_name' => 'Jawa Tengah',
-                'notes' => 'Kecamatan Gemolong',
-            ],
-            [
-                'village_name' => 'Karangmalang',
-                'city_name' => 'Sragen',
-                'province_name' => 'Jawa Tengah',
-                'notes' => 'Kecamatan Karangmalang',
-            ],
-            [
-                'village_name' => 'Masaran',
-                'city_name' => 'Sragen',
-                'province_name' => 'Jawa Tengah',
-                'notes' => 'Kecamatan Masaran',
-            ],
-
-            // Klaten
-            [
-                'village_name' => 'Klaten Utara',
-                'city_name' => 'Klaten',
-                'province_name' => 'Jawa Tengah',
-                'notes' => 'Kecamatan Klaten Utara',
-            ],
-            [
-                'village_name' => 'Klaten Selatan',
-                'city_name' => 'Klaten',
-                'province_name' => 'Jawa Tengah',
-                'notes' => 'Kecamatan Klaten Selatan',
-            ],
-            [
-                'village_name' => 'Delanggu',
-                'city_name' => 'Klaten',
-                'province_name' => 'Jawa Tengah',
-                'notes' => 'Kecamatan Delanggu',
-            ],
-            [
-                'village_name' => 'Prambanan',
-                'city_name' => 'Klaten',
-                'province_name' => 'Jawa Tengah',
-                'notes' => 'Kecamatan Prambanan',
-            ],
-
-            // Wonogiri
-            [
-                'village_name' => 'Wonogiri',
-                'city_name' => 'Wonogiri',
-                'province_name' => 'Jawa Tengah',
-                'notes' => 'Kecamatan Wonogiri',
-            ],
-            [
-                'village_name' => 'Pracimantoro',
-                'city_name' => 'Wonogiri',
-                'province_name' => 'Jawa Tengah',
-                'notes' => 'Kecamatan Pracimantoro',
-            ],
-            [
-                'village_name' => 'Baturetno',
-                'city_name' => 'Wonogiri',
-                'province_name' => 'Jawa Tengah',
-                'notes' => 'Kecamatan Baturetno',
-            ],
-            [
-                'village_name' => 'Ngadirojo',
-                'city_name' => 'Wonogiri',
-                'province_name' => 'Jawa Tengah',
-                'notes' => 'Kecamatan Ngadirojo',
-            ],
-
-            // Boyolali
-            [
-                'village_name' => 'Boyolali',
-                'city_name' => 'Boyolali',
-                'province_name' => 'Jawa Tengah',
-                'notes' => 'Kecamatan Boyolali',
-            ],
-            [
-                'village_name' => 'Selo',
-                'city_name' => 'Boyolali',
-                'province_name' => 'Jawa Tengah',
-                'notes' => 'Kecamatan Selo',
-            ],
-            [
-                'village_name' => 'Ampel',
-                'city_name' => 'Boyolali',
-                'province_name' => 'Jawa Tengah',
-                'notes' => 'Kecamatan Ampel',
-            ],
-            [
-                'village_name' => 'Andong',
-                'city_name' => 'Boyolali',
-                'province_name' => 'Jawa Tengah',
-                'notes' => 'Kecamatan Andong',
-            ],
-        ];
-
-        foreach ($locations as $location) {
-            Location::create($location);
+            return;
         }
+
+        $this->command->info('Importing locations from CSV...');
+
+        // Clear existing locations
+        Location::query()->delete();
+
+        $file = fopen($csvFile, 'r');
+        $header = fgetcsv($file); // Skip header row
+
+        $imported = 0;
+        $rowNumber = 1; // Start at 1 (header is row 1, data starts at row 2)
+
+        while (($row = fgetcsv($file)) !== false) {
+            $rowNumber++;
+
+            // Map CSV columns to model fields
+            $provinceName = $row[0] ?? null;
+            $cityName = $row[1] ?? null;
+            $districtName = $row[2] ?? null;
+            $villageName = $row[3] ?? null;
+            $notes = $row[4] ?? null;
+
+            // Skip if village name is empty
+            if (! $villageName) {
+                $this->command->warn("  Skipping row {$rowNumber}: missing village name");
+
+                continue;
+            }
+
+            // Normalize district name to consistent format
+            $districtName = $this->normalizeDistrictName($districtName);
+
+            Location::create([
+                'province_name' => $provinceName,
+                'city_name' => $cityName,
+                'district_name' => $districtName,
+                'village_name' => $villageName,
+                'notes' => $notes,
+            ]);
+
+            $imported++;
+        }
+
+        fclose($file);
+
+        $this->command->info("Successfully imported {$imported} locations!");
+    }
+
+    /**
+     * Normalize district name to consistent format "Kec. District".
+     */
+    private function normalizeDistrictName(?string $districtName): ?string
+    {
+        if (! $districtName) {
+            return null;
+        }
+
+        // Normalize to "Kec. District" format
+        if (preg_match('/^Kec\.?\s*(.+)$/i', $districtName, $matches)) {
+            return 'Kec. '.trim($matches[1]);
+        }
+
+        return $districtName;
     }
 }

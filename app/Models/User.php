@@ -107,4 +107,28 @@ class User extends Authenticatable
     {
         return $this->belongsTo(Office::class);
     }
+
+    /**
+     * Get the roles assigned to the user.
+     *
+     * @return \Illuminate\Database\Eloquent\Relations\BelongsToMany<Role, $this>
+     */
+    public function roles(): \Illuminate\Database\Eloquent\Relations\BelongsToMany
+    {
+        return $this->belongsToMany(Role::class)
+            ->withPivot('assigned_by')
+            ->withTimestamps();
+    }
+
+    /**
+     * Check if the user has a specific role.
+     */
+    public function hasRole(Role|string $role): bool
+    {
+        if ($role instanceof Role) {
+            return $this->roles->contains('id', $role->id);
+        }
+
+        return $this->roles->contains('name', $role);
+    }
 }

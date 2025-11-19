@@ -48,6 +48,11 @@ class Project extends Model
         return $this->hasMany(TaskProgress::class);
     }
 
+    public function progress(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(TaskProgress::class);
+    }
+
     public function users(): \Illuminate\Database\Eloquent\Relations\BelongsToMany
     {
         return $this->belongsToMany(User::class)->withPivot('role')->withTimestamps();
