@@ -542,6 +542,33 @@ new class extends Component
             ? Office::where('level_id', $koramilLevel->id)->where('parent_id', $this->selectedKodimId)->orderBy('name')->get()
             : collect();
 
+        // Calculate statistics based on filtered data (always visible)
+        $totalProjects = $projects->count();
+
+        // Active projects: filtered projects that have progress records
+        $projectIds = $projects->pluck('id');
+        $activeProjects = Project::whereIn('id', $projectIds)
+            ->whereHas('progress')
+            ->distinct()
+            ->count();
+
+        $totalLocations = $locations->count();
+
+        // Reporters: users assigned to filtered projects
+        $totalReporters = User::whereHas('projects', function ($q) use ($projectIds) {
+            $q->whereIn('projects.id', $projectIds);
+        })
+            ->whereHas('roles', fn ($q) => $q->where('name', 'Reporter'))
+            ->distinct()
+            ->count();
+
+        $stats = [
+            'total_projects' => $totalProjects,
+            'active_projects' => $activeProjects,
+            'total_locations' => $totalLocations,
+            'total_reporters' => $totalReporters,
+        ];
+
         if (! $this->selectedProjectId || ! $this->startDate || ! $this->endDate) {
             return [
                 'projects' => $projects,
@@ -550,7 +577,7 @@ new class extends Component
                 'kodims' => $kodims,
                 'koramils' => $koramils,
                 'locations' => $locations,
-                'stats' => null,
+                'stats' => $stats,
                 'taskProgress' => collect(),
                 'taskProgressByRoot' => [],
                 'hierarchicalProgress' => [],
@@ -588,27 +615,6 @@ new class extends Component
 
         // Group task progress by root task
         $taskProgressByRoot = $this->groupTasksByRoot($taskProgress);
-
-        // Calculate statistics - new dashboard metrics
-        $totalProjects = Project::count();
-
-        // Active projects: projects that have progress records
-        $activeProjects = Project::whereHas('progress')->distinct()->count();
-
-        $totalLocations = Location::count();
-
-        // Reporters: users with Reporter role
-        $reporterRole = Role::where('name', 'Reporter')->first();
-        $totalReporters = $reporterRole
-            ? User::whereHas('roles', fn ($q) => $q->where('role_id', $reporterRole->id))->count()
-            : 0;
-
-        $stats = [
-            'total_projects' => $totalProjects,
-            'active_projects' => $activeProjects,
-            'total_locations' => $totalLocations,
-            'total_reporters' => $totalReporters,
-        ];
 
         // Calculate hierarchical progress (month -> week -> day)
         $hierarchicalProgress = $this->calculateHierarchicalProgress();
@@ -857,7 +863,7 @@ new class extends Component
             </flux:select>
         </div>
 
-        @if($selectedProjectId && $stats)
+        @if($stats)
             <!-- Statistics Cards -->
             <div class="grid gap-4 md:grid-cols-4">
                 <div class="rounded-xl border border-neutral-200 bg-white p-6 dark:border-neutral-700 dark:bg-neutral-900">
@@ -892,7 +898,9 @@ new class extends Component
                     <div class="mt-1 text-xs text-neutral-500">Users with reporter role</div>
                 </div>
             </div>
+        @endif
 
+        @if($selectedProjectId)
             <!-- S-Curve Chart -->
             @if(!empty($sCurveData['labels']))
                 <div class="rounded-xl border border-neutral-200 bg-white p-6 dark:border-neutral-700 dark:bg-neutral-900" wire:key="scurve-{{ $selectedProjectId }}-{{ md5(json_encode($sCurveData)) }}">
@@ -1367,11 +1375,5 @@ new class extends Component
                     </div>
                 </div>
             @endif
-        @else
-            <div class="rounded-xl border border-neutral-200 bg-neutral-50 p-12 text-center dark:border-neutral-700 dark:bg-neutral-800">
-                <p class="text-neutral-600 dark:text-neutral-400">
-                    Please select a project to view the dashboard.
-                </p>
-            </div>
         @endif
 </div>

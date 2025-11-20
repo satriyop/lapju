@@ -1,9 +1,7 @@
 <?php
 
 use App\Models\Office;
-use App\Models\OfficeLevel;
 use App\Models\Project;
-use App\Models\Task;
 use App\Models\TaskProgress;
 use Carbon\Carbon;
 use Livewire\Volt\Component;
@@ -32,6 +30,33 @@ new class extends Component
     {
         $this->year = now()->year;
         $this->month = now()->month;
+
+        $currentUser = auth()->user();
+
+        // Reporters don't use office filters - just their assigned projects
+        if ($currentUser->hasRole('Reporter')) {
+            return;
+        }
+
+        // Managers at Kodim level - set defaults to their Kodim
+        if ($currentUser->office_id) {
+            $userOffice = Office::with('level', 'parent.parent')->find($currentUser->office_id);
+
+            if ($userOffice && $userOffice->level->level === 3) {
+                // Manager at Kodim level - set their hierarchy as defaults
+                $this->kodimId = $userOffice->id;
+
+                if ($userOffice->parent) {
+                    $this->koremId = $userOffice->parent->id;
+
+                    if ($userOffice->parent->parent) {
+                        $this->kodamId = $userOffice->parent->parent->id;
+                    }
+                }
+            }
+        }
+
+        // Don't auto-select filters - let user choose manually
     }
 
     public function updatedKodamId(): void
@@ -219,17 +244,16 @@ new class extends Component
 <div class="flex h-full w-full flex-1 flex-col gap-6 p-6">
     <!-- Header -->
     <div class="flex items-center justify-between">
-        <flux:heading size="xl" class="text-white">Calendar Progress</flux:heading>
-        <div class="text-sm text-neutral-400">{{ $currentDate }}</div>
+        <flux:heading size="xl">Calendar Progress</flux:heading>
+        <div class="text-sm text-neutral-600">{{ $currentDate }}</div>
     </div>
 
     <!-- Filters -->
-    <div class="grid grid-cols-1 gap-4 md:grid-cols-5">
+    <div class="grid grid-cols-1 gap-4 md:flex md:gap-4">
         @if(!auth()->user()->hasRole('Reporter') && !auth()->user()->hasRole('Manager'))
             <!-- Kodam -->
-            <div>
-                <label class="mb-2 block text-xs font-medium text-neutral-400">Kodam</label>
-                <flux:select wire:model.live="kodamId" class="bg-neutral-800 text-white">
+            <div class="md:flex-1">
+                <flux:select wire:model.live="kodamId" label="Kodam">
                     <flux:select.option value="">All Kodam</flux:select.option>
                     @foreach($kodams as $kodam)
                         <flux:select.option value="{{ $kodam->id }}">
@@ -240,9 +264,8 @@ new class extends Component
             </div>
 
             <!-- Korem -->
-            <div>
-                <label class="mb-2 block text-xs font-medium text-neutral-400">Korem</label>
-                <flux:select wire:model.live="koremId" class="bg-neutral-800 text-white" :disabled="!$kodamId">
+            <div class="md:flex-1">
+                <flux:select wire:model.live="koremId" label="Korem" :disabled="!$kodamId">
                     <flux:select.option value="">All Korem</flux:select.option>
                     @foreach($korems as $korem)
                         <flux:select.option value="{{ $korem->id }}">
@@ -253,9 +276,8 @@ new class extends Component
             </div>
 
             <!-- Kodim -->
-            <div>
-                <label class="mb-2 block text-xs font-medium text-neutral-400">Kodim</label>
-                <flux:select wire:model.live="kodimId" class="bg-neutral-800 text-white" :disabled="!$koremId">
+            <div class="md:flex-1">
+                <flux:select wire:model.live="kodimId" label="Kodim" :disabled="!$koremId">
                     <flux:select.option value="">All Kodim</flux:select.option>
                     @foreach($kodims as $kodim)
                         <flux:select.option value="{{ $kodim->id }}">
@@ -266,9 +288,8 @@ new class extends Component
             </div>
 
             <!-- Koramil -->
-            <div>
-                <label class="mb-2 block text-xs font-medium text-neutral-400">Koramil</label>
-                <flux:select wire:model.live="koramilId" class="bg-neutral-800 text-white" :disabled="!$kodimId">
+            <div class="md:flex-1">
+                <flux:select wire:model.live="koramilId" label="Koramil" :disabled="!$kodimId">
                     <flux:select.option value="">{{ $kodimId ? 'All Koramil' : 'Select Kodim first' }}</flux:select.option>
                     @foreach($koramils as $koramil)
                         <flux:select.option value="{{ $koramil->id }}">
@@ -281,9 +302,8 @@ new class extends Component
 
         @if(auth()->user()->hasRole('Manager'))
             <!-- Koramil (Manager sees only Koramils under their Kodim) -->
-            <div>
-                <label class="mb-2 block text-xs font-medium text-neutral-400">Koramil</label>
-                <flux:select wire:model.live="koramilId" class="bg-neutral-800 text-white">
+            <div class="md:flex-1">
+                <flux:select wire:model.live="koramilId" label="Koramil">
                     <flux:select.option value="">All Koramil</flux:select.option>
                     @foreach($koramils as $koramil)
                         <flux:select.option value="{{ $koramil->id }}">
@@ -295,10 +315,9 @@ new class extends Component
         @endif
 
         <!-- Project -->
-        <div>
-            <label class="mb-2 block text-xs font-medium text-neutral-400">Project</label>
-            <flux:select wire:model.live="projectId" class="bg-neutral-800 text-white">
-                <flux:select.option value="">All Projects</flux:select.option>
+        <div class="md:flex-1">
+            <flux:select wire:model.live="projectId" label="Project">
+                <flux:select.option value="">Select Project</flux:select.option>
                 @foreach($projects as $project)
                     <flux:select.option value="{{ $project->id }}">
                         {{ $project->name }}
@@ -309,64 +328,65 @@ new class extends Component
     </div>
 
     <!-- Calendar Navigation -->
-    <div class="flex items-center justify-center gap-4 rounded-xl bg-neutral-900 p-4">
-        <flux:button wire:click="previousMonth" variant="ghost" size="sm" class="text-white">
+    <div class="flex items-center justify-center gap-4 rounded-lg border border-neutral-200 bg-white p-4">
+        <flux:button wire:click="previousMonth" variant="ghost" size="sm">
             <flux:icon.chevron-left class="h-5 w-5" />
         </flux:button>
-        <span class="min-w-[180px] text-center text-lg font-semibold text-white">{{ $monthName }}</span>
-        <flux:button wire:click="goToToday" variant="outline" size="sm" class="text-white">
+        <span class="min-w-[180px] text-center text-lg font-semibold text-neutral-900">{{ $monthName }}</span>
+        <flux:button wire:click="goToToday" variant="primary" size="sm">
             Today
         </flux:button>
-        <flux:button wire:click="nextMonth" variant="ghost" size="sm" class="text-white">
+        <flux:button wire:click="nextMonth" variant="ghost" size="sm">
             <flux:icon.chevron-right class="h-5 w-5" />
         </flux:button>
     </div>
 
     <!-- Calendar Grid -->
-    <div class="overflow-hidden rounded-xl border border-neutral-800 bg-neutral-900">
+    <div class="overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-sm">
         <!-- Calendar Header -->
-        <div class="grid grid-cols-7 gap-px bg-neutral-800">
-            @foreach(['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as $day)
-                <div class="bg-neutral-900 px-4 py-3 text-center text-sm font-semibold text-neutral-400">
+        <div class="grid grid-cols-7 border-b border-neutral-200 bg-neutral-50">
+            @foreach(['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'] as $day)
+                <div class="px-2 py-2 text-center text-[11px] font-medium tracking-wide text-neutral-500">
                     {{ $day }}
                 </div>
             @endforeach
         </div>
 
         <!-- Calendar Body -->
-        <div class="grid grid-cols-7 gap-px bg-neutral-800">
+        <div class="grid grid-cols-7">
             @foreach($calendar as $week)
                 @foreach($week as $day)
-                    <div class="min-h-[140px] bg-black p-3 {{ $day['isCurrentMonth'] ? '' : 'bg-neutral-950' }}">
-                        <div class="mb-3 text-lg {{ $day['isCurrentMonth'] ? 'font-medium text-neutral-300' : 'text-neutral-700' }}">
-                            {{ $day['date']->format('j') }}
+                    <div class="group relative min-h-[110px] border-b border-r border-neutral-100 p-2 transition-colors hover:bg-neutral-50 {{ $day['isCurrentMonth'] ? 'bg-white' : 'bg-neutral-50/50' }} {{ ($loop->parent->index + 1) % 7 == 0 ? '!border-r-0' : '' }}">
+                        <!-- Date Number -->
+                        <div class="mb-1.5 flex items-start justify-between">
+                            <span class="inline-flex items-center justify-center {{ $day['isToday'] ? 'h-6 w-6 rounded-full bg-blue-500 text-xs font-semibold text-white' : 'text-sm font-medium ' . ($day['isCurrentMonth'] ? 'text-neutral-700' : 'text-neutral-400') }}">
+                                {{ $day['date']->format('j') }}
+                            </span>
                         </div>
 
-                        @if($projectId && ($day['plannedProgress'] > 0 || $day['actualProgress'] > 0))
-                            <div class="space-y-3">
+                        @if($projectId)
+                            <div class="space-y-1">
                                 <!-- Planned Progress -->
-                                <div class="space-y-1">
-                                    <div class="flex items-center justify-between text-xs">
-                                        <span class="text-neutral-400">Planned</span>
-                                        <span class="font-medium text-blue-400">{{ number_format($day['plannedProgress'], 1) }}%</span>
+                                <div class="rounded bg-blue-50 px-1 py-0.5">
+                                    <div class="mb-0.5 flex items-center justify-end">
+                                        <span class="text-[7px] font-medium text-blue-700">{{ number_format($day['plannedProgress'], 1) }}%</span>
                                     </div>
-                                    <div class="h-1.5 overflow-hidden rounded-full bg-neutral-800">
+                                    <div class="h-0.5 overflow-hidden rounded-full bg-blue-100">
                                         <div
-                                            class="h-full rounded-full bg-blue-500 transition-all"
+                                            class="h-full rounded-full bg-blue-500"
                                             style="width: {{ $day['plannedProgress'] }}%"
                                         ></div>
                                     </div>
                                 </div>
 
                                 <!-- Actual Progress -->
-                                <div class="space-y-1">
-                                    <div class="flex items-center justify-between text-xs">
-                                        <span class="text-neutral-400">Actual</span>
-                                        <span class="font-medium text-green-400">{{ number_format($day['actualProgress'], 1) }}%</span>
+                                <div class="rounded bg-green-50 px-1 py-0.5">
+                                    <div class="mb-0.5 flex items-center justify-end">
+                                        <span class="text-[7px] font-medium text-green-700">{{ number_format($day['actualProgress'], 1) }}%</span>
                                     </div>
-                                    <div class="h-1.5 overflow-hidden rounded-full bg-neutral-800">
+                                    <div class="h-0.5 overflow-hidden rounded-full bg-green-100">
                                         <div
-                                            class="h-full rounded-full bg-green-500 transition-all"
+                                            class="h-full rounded-full bg-green-500"
                                             style="width: {{ $day['actualProgress'] }}%"
                                         ></div>
                                     </div>
@@ -378,4 +398,18 @@ new class extends Component
             @endforeach
         </div>
     </div>
+
+    <!-- Legend -->
+    @if($projectId)
+        <div class="flex items-center justify-center gap-6 rounded-lg border border-neutral-200 bg-white p-3">
+            <div class="flex items-center gap-2">
+                <div class="h-3 w-3 rounded-full bg-blue-500"></div>
+                <span class="text-sm text-neutral-700">Planned Progress</span>
+            </div>
+            <div class="flex items-center gap-2">
+                <div class="h-3 w-3 rounded-full bg-green-500"></div>
+                <span class="text-sm text-neutral-700">Actual Progress</span>
+            </div>
+        </div>
+    @endif
 </div>
