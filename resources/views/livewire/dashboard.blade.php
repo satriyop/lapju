@@ -290,6 +290,39 @@ new class extends Component
     {
         $query = Location::query();
 
+        // Reporters can only see locations from their assigned projects
+        if (auth()->user()->hasRole('Reporter')) {
+            $locationIds = auth()->user()->projects()->pluck('location_id')->filter();
+            $query->whereIn('id', $locationIds);
+
+            return $query->orderBy('city_name')->orderBy('village_name')->get();
+        }
+
+        // Managers at Kodim level - filter by their Kodim's coverage
+        $currentUser = auth()->user();
+        if ($currentUser->hasRole('Manager') && $currentUser->office_id) {
+            $userOffice = Office::with('level')->find($currentUser->office_id);
+            if ($userOffice && $userOffice->level->level === 3) {
+                // Get all Koramils under this Kodim
+                $koramils = Office::where('parent_id', $currentUser->office_id)->get();
+
+                // Collect all coverage areas
+                $districts = $koramils->pluck('coverage_district')->filter();
+                $cities = $koramils->pluck('coverage_city')->filter();
+
+                $query->where(function ($q) use ($districts, $cities) {
+                    if ($districts->isNotEmpty()) {
+                        $q->orWhereIn('district_name', $districts);
+                    }
+                    if ($cities->isNotEmpty()) {
+                        $q->orWhereIn('city_name', $cities);
+                    }
+                });
+
+                return $query->orderBy('city_name')->orderBy('village_name')->get();
+            }
+        }
+
         // Only filter locations when Kodim or Koramil is selected
         // (projects are assigned to Koramils, so location filter should match)
         $selectedOffice = null;
