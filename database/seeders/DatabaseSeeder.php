@@ -17,10 +17,10 @@ class DatabaseSeeder extends Seeder
 
         // Seed foundational data first (needed for office_id)
         $this->call([
-            RoleSeeder::class,
             OfficeLevelSeeder::class,
             OfficeSeeder::class,
             OfficeCoverageSeeder::class,
+            RoleSeeder::class,
             TaskTemplateSeeder::class,
             SettingSeeder::class,
         ]);
@@ -97,6 +97,44 @@ class DatabaseSeeder extends Seeder
         }
 
         $this->command->info("Reporter user created: {$reporter->name} at {$koramil?->name}");
+
+        // Create Manager users for each Kodim office
+        $managerRole = \App\Models\Role::where('name', 'Manager')->first();
+        $kodimOffices = \App\Models\Office::whereHas('level', fn ($q) => $q->where('level', 3))
+            ->orderBy('name')
+            ->get();
+
+        $this->command->info("Creating Manager users for {$kodimOffices->count()} Kodim offices...");
+
+        foreach ($kodimOffices as $index => $kodim) {
+            // Extract office code from name (e.g., "Kodim 0723/Klaten" -> "0723")
+            preg_match('/(\d{4})/', $kodim->name, $matches);
+            $officeCode = $matches[1] ?? str_pad($index + 2, 4, '0', STR_PAD_LEFT);
+
+            // Extract location name (e.g., "Kodim 0723/Klaten" -> "Klaten")
+            $locationName = explode('/', $kodim->name)[1] ?? "Kodim {$officeCode}";
+
+            $manager = User::updateOrCreate(
+                ['phone' => '0812345670' . ($index + 2)],
+                [
+                    'name' => "Manager {$locationName}",
+                    'email' => "kodim{$officeCode}@example.com",
+                    'nrp' => '3124010' . ($index + 2),
+                    'office_id' => $kodim->id,
+                    'password' => bcrypt('password'),
+                    'is_approved' => true,
+                    'approved_at' => now(),
+                    'approved_by' => 1,
+                    'is_admin' => false,
+                ]
+            );
+
+            if ($managerRole && ! $manager->hasRole($managerRole)) {
+                $manager->roles()->attach($managerRole->id, ['assigned_by' => 1]);
+            }
+
+            $this->command->info("Manager user created: {$manager->name} at {$kodim->name}");
+        }
 
         // Now seed projects and progress (which depend on reporter user)
         $this->call([
