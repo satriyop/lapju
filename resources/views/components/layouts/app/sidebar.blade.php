@@ -14,7 +14,6 @@
             <flux:navlist variant="outline">
                 <flux:navlist.group :heading="__('Platform Progress')" class="grid">
                     <flux:navlist.item icon="home" :href="route('dashboard')" :current="request()->routeIs('dashboard')" wire:navigate>{{ __('Dashboard') }}</flux:navlist.item>
-                    <flux:navlist.item icon="users" :href="route('partners.index')" :current="request()->routeIs('partners.index')" wire:navigate>{{ __('Partners') }}</flux:navlist.item>
                     <flux:navlist.item icon="folder" :href="route('projects.index')" :current="request()->routeIs('projects.index')" wire:navigate>{{ __('Projects') }}</flux:navlist.item>
                     <flux:navlist.item icon="chart-bar" :href="route('progress.index')" :current="request()->routeIs('progress.index')" wire:navigate>{{ __('Progress') }}</flux:navlist.item>
                     <flux:navlist.item icon="calendar" :href="route('calendar-progress.index')" :current="request()->routeIs('calendar-progress.index')" wire:navigate>{{ __('Calendar Progress') }}</flux:navlist.item>
@@ -30,6 +29,7 @@
                 <flux:navlist.group :heading="__('Administration')" class="grid">
                     <flux:navlist.item icon="building-office" :href="route('admin.offices.index')" :current="request()->routeIs('admin.offices.index')" wire:navigate>{{ __('Offices') }}</flux:navlist.item>
                     <flux:navlist.item icon="map-pin" :href="route('admin.locations.index')" :current="request()->routeIs('admin.locations.index')" wire:navigate>{{ __('Locations') }}</flux:navlist.item>
+                    <flux:navlist.item icon="users" :href="route('partners.index')" :current="request()->routeIs('partners.index')" wire:navigate>{{ __('Partners') }}</flux:navlist.item>
                     <flux:navlist.item icon="shield-check" :href="route('admin.roles.index')" :current="request()->routeIs('admin.roles.index')" wire:navigate>{{ __('Roles') }}</flux:navlist.item>
                     <flux:navlist.item icon="document-duplicate" :href="route('admin.task-templates.index')" :current="request()->routeIs('admin.task-templates.index')" wire:navigate>{{ __('Task Templates') }}</flux:navlist.item>
                     <flux:navlist.item icon="cog" :href="route('admin.settings.index')" :current="request()->routeIs('admin.settings.index')" wire:navigate>{{ __('Settings') }}</flux:navlist.item>

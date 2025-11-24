@@ -89,6 +89,11 @@ class User extends Authenticatable
         return $this->belongsToMany(Project::class)->withPivot('role')->withTimestamps();
     }
 
+    public function progressPhotos(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(ProgressPhoto::class);
+    }
+
     public function isAdmin(): bool
     {
         return $this->is_admin ?? false;

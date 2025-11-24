@@ -4,7 +4,6 @@ use App\Models\Location;
 use App\Models\Office;
 use App\Models\OfficeLevel;
 use App\Models\Project;
-use App\Models\Role;
 use App\Models\Task;
 use App\Models\TaskProgress;
 use App\Models\User;
@@ -81,7 +80,7 @@ new class extends Component
         }
 
         // If not a Manager or no office assigned, set default filters to Kodam IV and Korem 074
-        if (!$this->selectedKodamId) {
+        if (! $this->selectedKodamId) {
             $kodamIV = Office::whereHas('level', fn ($q) => $q->where('level', 1))
                 ->where('name', 'like', '%Kodam IV%')
                 ->first();
@@ -429,6 +428,71 @@ new class extends Component
         return $totalWeightedProgress;
     }
 
+    private function calculateProjectActualProgress(Project $project): float
+    {
+        // Get all leaf tasks for this project
+        $leafTasks = Task::where('project_id', $project->id)
+            ->whereDoesntHave('children')
+            ->get();
+
+        if ($leafTasks->isEmpty()) {
+            return 0;
+        }
+
+        $totalWeightedProgress = 0;
+        $totalWeight = $leafTasks->sum('weight');
+
+        if ($totalWeight == 0) {
+            return 0;
+        }
+
+        foreach ($leafTasks as $task) {
+            // Get the latest progress for this task
+            $latestProgress = TaskProgress::where('project_id', $project->id)
+                ->where('task_id', $task->id)
+                ->orderBy('progress_date', 'desc')
+                ->first();
+
+            if ($latestProgress) {
+                // Weighted progress = (task percentage * task weight) / total weight
+                $taskPercentage = min((float) $latestProgress->percentage, 100);
+                $totalWeightedProgress += ($taskPercentage * $task->weight) / $totalWeight;
+            }
+        }
+
+        return $totalWeightedProgress;
+    }
+
+    private function getTop10Projects(): array
+    {
+        // Get filtered projects based on user role and selected filters
+        $projects = $this->getFilteredProjects();
+
+        // Calculate progress for each project and prepare data
+        $projectsWithProgress = [];
+
+        foreach ($projects as $project) {
+            $progress = $this->calculateProjectActualProgress($project);
+
+            // Only include projects with progress > 0
+            if ($progress > 0) {
+                $projectsWithProgress[] = [
+                    'id' => $project->id,
+                    'name' => $project->name,
+                    'progress' => $progress,
+                    'location_village' => $project->location->village_name ?? '-',
+                    'location_district' => $project->location->district_name ?? '-',
+                    'office_name' => $project->office->name ?? null,
+                ];
+            }
+        }
+
+        // Sort by progress descending and take top 10
+        usort($projectsWithProgress, fn ($a, $b) => $b['progress'] <=> $a['progress']);
+
+        return array_slice($projectsWithProgress, 0, 10);
+    }
+
     private function calculateHierarchicalProgress(): array
     {
         if (! $this->selectedProjectId || ! $this->startDate || ! $this->endDate) {
@@ -569,6 +633,9 @@ new class extends Component
             'total_reporters' => $totalReporters,
         ];
 
+        // Get top 10 projects with best actual progress (always show, not dependent on selected project)
+        $top10Projects = $this->getTop10Projects();
+
         if (! $this->selectedProjectId || ! $this->startDate || ! $this->endDate) {
             return [
                 'projects' => $projects,
@@ -583,6 +650,7 @@ new class extends Component
                 'hierarchicalProgress' => [],
                 'sCurveData' => ['labels' => [], 'planned' => [], 'actual' => []],
                 'tasksWithoutProgress' => [],
+                'top10Projects' => $top10Projects,
             ];
         }
 
@@ -638,6 +706,7 @@ new class extends Component
             'hierarchicalProgress' => $hierarchicalProgress,
             'sCurveData' => $sCurveData,
             'tasksWithoutProgress' => $tasksWithoutProgress,
+            'top10Projects' => $top10Projects,
         ];
     }
 
@@ -661,7 +730,7 @@ new class extends Component
 
     private function getTasksWithoutProgress(): array
     {
-        if (! $this->selectedProjectId) {
+        if (! $this->selectedProjectId || ! $this->startDate || ! $this->endDate) {
             return [];
         }
 
@@ -672,8 +741,9 @@ new class extends Component
             ->orderBy('_lft')
             ->get();
 
-        // Get task IDs that have progress for this project
+        // Get task IDs that have progress within the selected date range
         $taskIdsWithProgress = TaskProgress::where('project_id', $this->selectedProjectId)
+            ->whereBetween('progress_date', [$this->startDate, $this->endDate])
             ->distinct()
             ->pluck('task_id')
             ->toArray();
@@ -768,11 +838,19 @@ new class extends Component
             $grouped[$rootName]['task_count']++;
         }
 
-        // Calculate average progress for each root task
+        // Calculate weighted average progress for each root task
         foreach ($grouped as $rootName => $data) {
-            $totalPercentage = array_sum(array_column($data['tasks'], 'percentage'));
-            $grouped[$rootName]['avg_progress'] = $data['task_count'] > 0
-                ? round($totalPercentage / $data['task_count'], 2)
+            $totalWeight = 0;
+            $totalWeightedProgress = 0;
+
+            foreach ($data['tasks'] as $item) {
+                $taskWeight = (float) $item['task']->weight;
+                $totalWeight += $taskWeight;
+                $totalWeightedProgress += $item['percentage'] * $taskWeight;
+            }
+
+            $grouped[$rootName]['avg_progress'] = $totalWeight > 0
+                ? round($totalWeightedProgress / $totalWeight, 2)
                 : 0;
 
             // Sort tasks by percentage descending
@@ -899,6 +977,85 @@ new class extends Component
                 </div>
             </div>
         @endif
+
+        <!-- Top 10 Projects with Best Actual Progress -->
+        <div class="rounded-xl border border-neutral-200 bg-white dark:border-neutral-700 dark:bg-neutral-900">
+            <div class="border-b border-neutral-200 p-6 dark:border-neutral-700">
+                <flux:heading size="lg">Top 10 Projects with Best Actual Progress</flux:heading>
+                <p class="mt-1 text-sm text-neutral-600 dark:text-neutral-400">
+                    Ranked by weighted average progress of all tasks
+                </p>
+            </div>
+            <div class="p-6">
+                @if(empty($top10Projects))
+                    <div class="py-12 text-center text-neutral-600 dark:text-neutral-400">
+                        No projects with progress data available.
+                    </div>
+                @else
+                    <div class="space-y-4">
+                        @foreach($top10Projects as $index => $projectData)
+                            <div class="rounded-lg border border-neutral-200 bg-neutral-50 p-4 dark:border-neutral-700 dark:bg-neutral-800">
+                                <div class="flex items-start gap-4">
+                                    <!-- Rank Badge -->
+                                    <div class="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-full
+                                        @if($index === 0) bg-yellow-100 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300
+                                        @elseif($index === 1) bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300
+                                        @elseif($index === 2) bg-orange-100 text-orange-700 dark:bg-orange-900 dark:text-orange-300
+                                        @else bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300
+                                        @endif">
+                                        <span class="text-xl font-bold">{{ $index + 1 }}</span>
+                                    </div>
+
+                                    <!-- Project Info -->
+                                    <div class="flex-1">
+                                        <div class="mb-2">
+                                            <h4 class="font-semibold text-neutral-900 dark:text-neutral-100">
+                                                {{ $projectData['name'] }}
+                                            </h4>
+                                            <div class="mt-1 text-sm text-neutral-600 dark:text-neutral-400">
+                                                <span>{{ $projectData['location_village'] }}, {{ $projectData['location_district'] }}</span>
+                                                @if($projectData['office_name'])
+                                                    <span class="mx-1">•</span>
+                                                    <span>{{ $projectData['office_name'] }}</span>
+                                                @endif
+                                            </div>
+                                        </div>
+
+                                        <!-- Progress Bar -->
+                                        <div class="space-y-2">
+                                            <div class="flex items-center justify-between">
+                                                <span class="text-sm font-medium text-neutral-600 dark:text-neutral-400">
+                                                    Actual Progress
+                                                </span>
+                                                <span class="text-lg font-bold
+                                                    @if($projectData['progress'] >= 90) text-green-600 dark:text-green-400
+                                                    @elseif($projectData['progress'] >= 70) text-blue-600 dark:text-blue-400
+                                                    @elseif($projectData['progress'] >= 50) text-yellow-600 dark:text-yellow-400
+                                                    @else text-red-600 dark:text-red-400
+                                                    @endif">
+                                                    {{ number_format($projectData['progress'], 2) }}%
+                                                </span>
+                                            </div>
+                                            <div class="h-3 w-full overflow-hidden rounded-full bg-neutral-200 dark:bg-neutral-700">
+                                                <div
+                                                    class="h-full rounded-full transition-all
+                                                        @if($projectData['progress'] >= 90) bg-green-500
+                                                        @elseif($projectData['progress'] >= 70) bg-blue-500
+                                                        @elseif($projectData['progress'] >= 50) bg-yellow-500
+                                                        @else bg-red-500
+                                                        @endif"
+                                                    style="width: {{ min($projectData['progress'], 100) }}%"
+                                                ></div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        @endforeach
+                    </div>
+                @endif
+            </div>
+        </div>
 
         @if($selectedProjectId)
             <!-- S-Curve Chart -->
@@ -1144,177 +1301,6 @@ new class extends Component
                     </div>
                 </div>
             @endif
-
-            <!-- Task Progress Details -->
-            <div
-                class="rounded-xl border border-neutral-200 bg-white dark:border-neutral-700 dark:bg-neutral-900"
-                x-data="{
-                    expandedRoots: {},
-                    showAllRoots: false,
-                    defaultVisibleCount: 5,
-                    toggleRoot(rootId) {
-                        this.expandedRoots[rootId] = !this.expandedRoots[rootId];
-                    },
-                    isExpanded(rootId) {
-                        return this.expandedRoots[rootId] || false;
-                    }
-                }"
-            >
-                <div class="border-b border-neutral-200 p-6 dark:border-neutral-700">
-                    <div class="flex items-center justify-between">
-                        <flux:heading size="lg">Task Progress Details</flux:heading>
-                        @if(!empty($taskProgressByRoot))
-                            <div class="text-sm text-neutral-600 dark:text-neutral-400">
-                                {{ count($taskProgressByRoot) }} root task groups
-                            </div>
-                        @endif
-                    </div>
-                </div>
-                <div class="p-6">
-                    @if(empty($taskProgressByRoot))
-                        <div class="py-12 text-center text-neutral-600 dark:text-neutral-400">
-                            No progress data available for the selected period.
-                        </div>
-                    @else
-                        <div class="space-y-4">
-                            @php $rootIndex = 0; @endphp
-                            @foreach($taskProgressByRoot as $rootName => $rootData)
-                                <div
-                                    x-show="showAllRoots || {{ $rootIndex }} < defaultVisibleCount"
-                                    x-transition:enter="transition ease-out duration-200"
-                                    x-transition:enter-start="opacity-0 transform -translate-y-2"
-                                    x-transition:enter-end="opacity-100 transform translate-y-0"
-                                    class="overflow-hidden rounded-lg border border-neutral-200 dark:border-neutral-700"
-                                    wire:key="root-{{ $rootData['root_id'] }}"
-                                >
-                                    <!-- Root Task Header (Collapsible) -->
-                                    <button
-                                        @click="toggleRoot({{ $rootData['root_id'] }})"
-                                        class="flex w-full items-center justify-between bg-neutral-100 p-4 text-left transition-colors hover:bg-neutral-200 dark:bg-neutral-800 dark:hover:bg-neutral-700"
-                                    >
-                                        <div class="flex items-center gap-3">
-                                            <svg
-                                                class="h-5 w-5 transform text-neutral-500 transition-transform duration-200 dark:text-neutral-400"
-                                                :class="{ 'rotate-90': isExpanded({{ $rootData['root_id'] }}) }"
-                                                fill="none"
-                                                stroke="currentColor"
-                                                viewBox="0 0 24 24"
-                                            >
-                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
-                                            </svg>
-                                            <div>
-                                                <div class="font-semibold text-neutral-900 dark:text-neutral-100">
-                                                    {{ $rootName }}
-                                                </div>
-                                                <div class="text-sm text-neutral-600 dark:text-neutral-400">
-                                                    {{ $rootData['task_count'] }} {{ Str::plural('task', $rootData['task_count']) }} with progress
-                                                </div>
-                                            </div>
-                                        </div>
-                                        <div class="flex items-center gap-4">
-                                            <div class="text-right">
-                                                <div class="text-lg font-bold
-                                                    @if($rootData['avg_progress'] >= 100) text-green-600 dark:text-green-400
-                                                    @elseif($rootData['avg_progress'] >= 75) text-blue-600 dark:text-blue-400
-                                                    @elseif($rootData['avg_progress'] >= 50) text-yellow-600 dark:text-yellow-400
-                                                    @else text-red-600 dark:text-red-400
-                                                    @endif">
-                                                    {{ number_format($rootData['avg_progress'], 1) }}%
-                                                </div>
-                                                <div class="text-xs text-neutral-500">avg progress</div>
-                                            </div>
-                                            <div class="h-2 w-24 overflow-hidden rounded-full bg-neutral-200 dark:bg-neutral-600">
-                                                <div
-                                                    class="h-full rounded-full transition-all
-                                                        @if($rootData['avg_progress'] >= 100) bg-green-500
-                                                        @elseif($rootData['avg_progress'] >= 75) bg-blue-500
-                                                        @elseif($rootData['avg_progress'] >= 50) bg-yellow-500
-                                                        @else bg-red-500
-                                                        @endif"
-                                                    style="width: {{ min($rootData['avg_progress'], 100) }}%"
-                                                ></div>
-                                            </div>
-                                        </div>
-                                    </button>
-
-                                    <!-- Collapsible Task Cards -->
-                                    <div
-                                        x-show="isExpanded({{ $rootData['root_id'] }})"
-                                        x-collapse
-                                        class="border-t border-neutral-200 bg-neutral-50 p-4 dark:border-neutral-700 dark:bg-neutral-900"
-                                    >
-                                        <div class="space-y-3">
-                                            @foreach($rootData['tasks'] as $item)
-                                                <div
-                                                    class="rounded-lg border border-neutral-200 bg-white p-4 dark:border-neutral-600 dark:bg-neutral-800"
-                                                    wire:key="task-{{ $item['task']->id }}"
-                                                >
-                                                    <div class="mb-2 flex items-start justify-between">
-                                                        <div class="flex-1">
-                                                            <div class="font-medium text-neutral-900 dark:text-neutral-100">
-                                                                {{ $item['task']->name }}
-                                                            </div>
-                                                            <div class="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
-                                                                {{ $item['breadcrumb'] }}
-                                                            </div>
-                                                            <div class="mt-2 text-sm text-neutral-600 dark:text-neutral-400">
-                                                                Last updated: {{ $item['progress_date']->format('M d, Y') }}
-                                                                @if($item['notes'])
-                                                                    <br>Notes: {{ $item['notes'] }}
-                                                                @endif
-                                                            </div>
-                                                        </div>
-                                                        <div class="ml-4 text-right">
-                                                            <div class="text-2xl font-bold
-                                                                @if($item['percentage'] >= 100) text-green-600 dark:text-green-400
-                                                                @elseif($item['percentage'] >= 75) text-blue-600 dark:text-blue-400
-                                                                @elseif($item['percentage'] >= 50) text-yellow-600 dark:text-yellow-400
-                                                                @else text-red-600 dark:text-red-400
-                                                                @endif">
-                                                                {{ number_format($item['percentage'], 1) }}%
-                                                            </div>
-                                                        </div>
-                                                    </div>
-                                                    <div class="h-2 w-full overflow-hidden rounded-full bg-neutral-200 dark:bg-neutral-700">
-                                                        <div
-                                                            class="h-full rounded-full transition-all
-                                                                @if($item['percentage'] >= 100) bg-green-500
-                                                                @elseif($item['percentage'] >= 75) bg-blue-500
-                                                                @elseif($item['percentage'] >= 50) bg-yellow-500
-                                                                @else bg-red-500
-                                                                @endif"
-                                                            style="width: {{ min($item['percentage'], 100) }}%"
-                                                        ></div>
-                                                    </div>
-                                                </div>
-                                            @endforeach
-                                        </div>
-                                    </div>
-                                </div>
-                                @php $rootIndex++; @endphp
-                            @endforeach
-                        </div>
-
-                        <!-- Show More / Show Less Button -->
-                        @if(count($taskProgressByRoot) > 5)
-                            <div class="mt-4 text-center">
-                                <flux:button
-                                    variant="outline"
-                                    size="sm"
-                                    @click="showAllRoots = !showAllRoots"
-                                >
-                                    <span x-show="!showAllRoots">
-                                        Show {{ count($taskProgressByRoot) - 5 }} More Root Tasks
-                                    </span>
-                                    <span x-show="showAllRoots">
-                                        Show Less
-                                    </span>
-                                </flux:button>
-                            </div>
-                        @endif
-                    @endif
-                </div>
-            </div>
 
             <!-- Tasks Without Progress -->
             @if(!empty($tasksWithoutProgress))

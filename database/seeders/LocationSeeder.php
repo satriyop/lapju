@@ -22,13 +22,11 @@ class LocationSeeder extends Seeder
 
         $this->command->info('Importing locations from CSV...');
 
-        // Clear existing locations
-        Location::query()->delete();
-
         $file = fopen($csvFile, 'r');
         $header = fgetcsv($file); // Skip header row
 
         $imported = 0;
+        $updated = 0;
         $rowNumber = 1; // Start at 1 (header is row 1, data starts at row 2)
 
         while (($row = fgetcsv($file)) !== false) {
@@ -51,20 +49,29 @@ class LocationSeeder extends Seeder
             // Normalize district name to consistent format
             $districtName = $this->normalizeDistrictName($districtName);
 
-            Location::create([
-                'province_name' => $provinceName,
-                'city_name' => $cityName,
-                'district_name' => $districtName,
-                'village_name' => $villageName,
-                'notes' => $notes,
-            ]);
+            // Use updateOrCreate to avoid deleting existing locations
+            $location = Location::updateOrCreate(
+                [
+                    'province_name' => $provinceName,
+                    'city_name' => $cityName,
+                    'district_name' => $districtName,
+                    'village_name' => $villageName,
+                ],
+                [
+                    'notes' => $notes,
+                ]
+            );
 
-            $imported++;
+            if ($location->wasRecentlyCreated) {
+                $imported++;
+            } else {
+                $updated++;
+            }
         }
 
         fclose($file);
 
-        $this->command->info("Successfully imported {$imported} locations!");
+        $this->command->info("Successfully processed locations: {$imported} created, {$updated} updated!");
     }
 
     /**

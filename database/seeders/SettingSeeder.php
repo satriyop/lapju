@@ -15,27 +15,37 @@ class SettingSeeder extends Seeder
         $settings = [
             [
                 'key' => 'app.name',
-                'value' => json_encode('LAPJU'),
+                'value' => 'LAPJU',
                 'description' => 'Application name',
             ],
             [
                 'key' => 'app.description',
-                'value' => json_encode('Project Progress Tracking System'),
+                'value' => 'Project Progress Tracking System',
                 'description' => 'Application description',
             ],
             [
                 'key' => 'project.default_status',
-                'value' => json_encode('pending'),
+                'value' => 'pending',
                 'description' => 'Default status for new projects',
             ],
             [
+                'key' => 'project.default_start_date',
+                'value' => '2025-11-01',
+                'description' => 'Default start date for new projects (YYYY-MM-DD format)',
+            ],
+            [
+                'key' => 'project.default_end_date',
+                'value' => '2026-01-31',
+                'description' => 'Default end date for new projects (YYYY-MM-DD format)',
+            ],
+            [
                 'key' => 'reports.max_items_per_page',
-                'value' => json_encode(50),
+                'value' => 50,
                 'description' => 'Maximum items to display per page in reports',
             ],
             [
                 'key' => 'notifications.enabled',
-                'value' => json_encode(true),
+                'value' => true,
                 'description' => 'Enable/disable system notifications',
             ],
         ];

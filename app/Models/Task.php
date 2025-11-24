@@ -68,4 +68,33 @@ class Task extends Model
     {
         return $this->belongsTo(TaskTemplate::class, 'template_task_id');
     }
+
+    public function progressPhotos(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(ProgressPhoto::class, 'root_task_id');
+    }
+
+    /**
+     * Check if this task has any descendant leaf tasks with progress entries.
+     * Progress is stored on leaf tasks (tasks without children), so we need to
+     * check all descendants within this task's nested set boundaries.
+     */
+    public function hasAnyDescendantProgress(): bool
+    {
+        return TaskProgress::whereIn('task_id', function ($query) {
+            // Get all leaf tasks (tasks that are not parents) within this task's boundaries
+            $query->select('id')
+                ->from('tasks')
+                ->where('project_id', $this->project_id)
+                ->where('_lft', '>', $this->_lft)
+                ->where('_rgt', '<', $this->_rgt)
+                ->whereNotIn('id', function ($subQuery) {
+                    $subQuery->select('parent_id')
+                        ->from('tasks')
+                        ->where('project_id', $this->project_id)
+                        ->whereNotNull('parent_id')
+                        ->distinct();
+                });
+        })->exists();
+    }
 }

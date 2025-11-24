@@ -12,26 +12,24 @@ use Illuminate\Database\Seeder;
 class ProgressSeeder extends Seeder
 {
     /**
-     * Seed progress data for PT Agrinas project.
-     * Uses project's actual start and end dates with realistic S-curve pattern.
+     * Seed progress data for all PT Agrinas projects.
+     * Project 1: 100% completion (full timeline to end_date).
+     * Projects 2-5: Proportional completion up to today (<30%, <50%, <70%, <90%).
      */
     public function run(): void
     {
-        // Find PT Agrinas project
-        $project = Project::whereHas('partner', fn ($q) => $q->where('name', 'like', '%AGRINAS%'))->first();
+        // Get all PT Agrinas projects ordered by ID
+        $projects = Project::whereHas('partner', fn ($q) => $q->where('name', 'like', '%AGRINAS%'))
+            ->orderBy('id')
+            ->get();
 
-        if (! $project) {
-            $this->command->error('PT Agrinas project not found!');
-
-            return;
-        }
-
-        // Validate project has dates set
-        if (! $project->start_date || ! $project->end_date) {
-            $this->command->error('Project does not have start_date and end_date set!');
+        if ($projects->isEmpty()) {
+            $this->command->error('No PT Agrinas projects found!');
 
             return;
         }
+
+        $this->command->info("Found {$projects->count()} projects to seed progress for.");
 
         // Get or create a user for the progress entries
         $user = User::first();
@@ -41,52 +39,91 @@ class ProgressSeeder extends Seeder
             return;
         }
 
-        // Get all leaf tasks (tasks without children)
-        $leafTasks = Task::whereNotIn('id', function ($query) {
-            $query->select('parent_id')
-                ->from('tasks')
-                ->whereNotNull('parent_id')
-                ->distinct();
-        })->orderBy('_lft')->get();
+        // Define completion targets for each project
+        $completionTargets = [
+            1 => 1.0,   // 100% - Project 1
+            2 => 0.30,  // 30% - Project 2
+            3 => 0.50,  // 50% - Project 3
+            4 => 0.70,  // 70% - Project 4
+            5 => 0.90,  // 90% - Project 5
+        ];
+
+        foreach ($projects as $projectIndex => $project) {
+            $projectNumber = $projectIndex + 1;
+
+            // Validate project has dates set
+            if (! $project->start_date || ! $project->end_date) {
+                $this->command->warn("Project {$projectNumber} does not have start_date and end_date set! Skipping...");
+
+                continue;
+            }
+
+            // Get completion target for this project
+            $completionTarget = $completionTargets[$projectNumber] ?? 0.50;
+
+            $this->command->newLine();
+            $this->command->info("=== Project {$projectNumber}: {$project->name} (Target: ".($completionTarget * 100).'%) ===');
+
+            $this->seedProjectProgress($project, $user, $completionTarget, $projectNumber);
+        }
+    }
+
+    /**
+     * Seed progress for a single project.
+     */
+    private function seedProjectProgress(Project $project, User $user, float $completionTarget, int $projectNumber): void
+    {
+        // Get all leaf tasks for this project
+        $leafTasks = Task::where('project_id', $project->id)
+            ->whereDoesntHave('children')
+            ->orderBy('_lft')
+            ->get();
 
         if ($leafTasks->isEmpty()) {
-            $this->command->error('No leaf tasks found!');
+            $this->command->warn('No leaf tasks found for this project!');
 
             return;
         }
 
-        $this->command->info("Found {$leafTasks->count()} leaf tasks to seed progress for.");
+        $this->command->info("Found {$leafTasks->count()} leaf tasks.");
 
         // Clear existing progress for this project
         TaskProgress::where('project_id', $project->id)->delete();
-        $this->command->info('Cleared existing progress data for this project.');
 
         // Use project's actual start and end dates
         $startDate = Carbon::parse($project->start_date);
-        $endDate = Carbon::parse($project->end_date);
+        $projectEndDate = Carbon::parse($project->end_date);
+        $today = Carbon::now();
 
-        // Generate weekly progress entries (to avoid too many records)
+        // Determine end progress date based on project number
+        if ($projectNumber === 1) {
+            // Project 1: Full timeline to end_date (100%)
+            $endProgressDate = $projectEndDate;
+        } else {
+            // Projects 2-5: Up to today (or project end date if today is after it)
+            $endProgressDate = $today->lt($projectEndDate) ? $today : $projectEndDate;
+        }
+
+        // Generate weekly progress entries
         $currentDate = $startDate->copy();
-        $totalDays = $startDate->diffInDays($endDate);
+        $totalDays = $startDate->diffInDays($projectEndDate);
         $progressEntries = [];
 
-        $this->command->info("Project: {$project->name}");
-        $this->command->info("Generating progress from {$startDate->format('Y-m-d')} to {$endDate->format('Y-m-d')} ({$totalDays} days)");
+        $this->command->info("Generating progress from {$startDate->format('Y-m-d')} to {$endProgressDate->format('Y-m-d')}");
 
-        // Calculate S-curve percentages for each task based on their position
         $taskCount = $leafTasks->count();
 
-        while ($currentDate <= $endDate) {
+        while ($currentDate <= $endProgressDate) {
             $daysPassed = $startDate->diffInDays($currentDate);
-            $timeProgress = $daysPassed / max($totalDays, 1); // 0 to 1
+            $timeProgress = $daysPassed / max($totalDays, 1); // 0 to 1 based on total project duration
 
             foreach ($leafTasks as $index => $task) {
                 // Calculate task-specific timing (earlier tasks start sooner)
-                $taskTimingOffset = ($index / $taskCount) * 0.3; // 0 to 0.3 offset
+                $taskTimingOffset = ($index / $taskCount) * 0.3;
                 $adjustedProgress = max(0, ($timeProgress - $taskTimingOffset) / (1 - $taskTimingOffset));
 
-                // Apply S-curve formula (logistic function)
-                $percentage = $this->calculateSCurvePercentage($adjustedProgress, $index, $taskCount);
+                // Apply S-curve formula with completion multiplier
+                $percentage = $this->calculateSCurvePercentage($adjustedProgress, $index, $taskCount, $completionTarget);
 
                 // Only save if there's meaningful progress (> 0)
                 if ($percentage > 0) {
@@ -108,6 +145,12 @@ class ProgressSeeder extends Seeder
         }
 
         // Insert progress entries in chunks
+        if (empty($progressEntries)) {
+            $this->command->warn('No progress entries to insert.');
+
+            return;
+        }
+
         $chunks = array_chunk($progressEntries, 500);
         $totalEntries = count($progressEntries);
 
@@ -124,24 +167,24 @@ class ProgressSeeder extends Seeder
         $bar->finish();
         $this->command->newLine();
 
-        $this->command->info("Successfully seeded {$totalEntries} progress entries for PT Agrinas project.");
+        $this->command->info("Successfully seeded {$totalEntries} progress entries.");
 
         // Show summary
         $this->showProgressSummary($project->id);
     }
 
     /**
-     * Calculate S-curve percentage using logistic function.
+     * Calculate S-curve percentage using logistic function with completion target.
      * This creates the characteristic slow-fast-slow pattern.
      */
-    private function calculateSCurvePercentage(float $timeProgress, int $taskIndex, int $totalTasks): float
+    private function calculateSCurvePercentage(float $timeProgress, int $taskIndex, int $totalTasks, float $completionTarget = 1.0): float
     {
         if ($timeProgress <= 0) {
             return 0;
         }
 
         if ($timeProgress >= 1) {
-            return 100;
+            return $completionTarget * 100;
         }
 
         // Logistic S-curve: y = 100 / (1 + e^(-k*(x-0.5)))
@@ -156,9 +199,12 @@ class ProgressSeeder extends Seeder
 
         $percentage = 100 / (1 + exp(-$k * ($adjustedTime - $midpoint)));
 
+        // Apply completion target multiplier
+        $percentage = $percentage * $completionTarget;
+
         // Add small random variance for realism (-2 to +2)
         $randomVariance = (($taskIndex * 7) % 5) - 2;
-        $percentage = max(0, min(100, $percentage + $randomVariance));
+        $percentage = max(0, min($completionTarget * 100, $percentage + $randomVariance));
 
         return $percentage;
     }

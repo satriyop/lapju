@@ -4,6 +4,8 @@ use App\Models\Location;
 use App\Models\Office;
 use App\Models\Partner;
 use App\Models\Project;
+use App\Models\Setting;
+use App\Models\TaskProgress;
 use Livewire\Volt\Component;
 use Livewire\WithPagination;
 
@@ -44,6 +46,27 @@ new class extends Component
         return auth()->user()->hasRole('Reporter');
     }
 
+    /**
+     * Calculate actual progress percentage for a project based on latest task progress entries.
+     */
+    private function calculateActualProgress(int $projectId): float
+    {
+        // Get the most recent progress date for this project
+        $latestDate = TaskProgress::where('project_id', $projectId)
+            ->max('progress_date');
+
+        if (! $latestDate) {
+            return 0.0;
+        }
+
+        // Get average percentage for all tasks on the latest date
+        $avgProgress = TaskProgress::where('project_id', $projectId)
+            ->where('progress_date', $latestDate)
+            ->avg('percentage');
+
+        return round($avgProgress ?? 0, 2);
+    }
+
     public function with(): array
     {
         $currentUser = auth()->user();
@@ -51,8 +74,12 @@ new class extends Component
             ->with(['partner', 'location', 'office'])
             ->when($this->search, fn ($query) => $query->where('name', 'like', "%{$this->search}%"));
 
+        // Reporters can only see their assigned projects
+        if ($currentUser->hasRole('Reporter')) {
+            $projectsQuery->whereHas('users', fn ($q) => $q->where('users.id', $currentUser->id));
+        }
         // Managers at Kodim level can only see projects in Koramils under their Kodim
-        if ($currentUser->hasRole('Manager') && $currentUser->office_id) {
+        elseif ($currentUser->hasRole('Manager') && $currentUser->office_id) {
             $userOffice = Office::with('level')->find($currentUser->office_id);
             if ($userOffice && $userOffice->level->level === 3) {
                 // Filter projects to only show those assigned to Koramils under this Kodim
@@ -63,6 +90,13 @@ new class extends Component
         }
 
         $projects = $projectsQuery->orderBy('name')->paginate(20);
+
+        // Calculate actual progress for each project if user is a reporter
+        if ($currentUser->hasRole('Reporter')) {
+            foreach ($projects as $project) {
+                $project->actual_progress = $this->calculateActualProgress($project->id);
+            }
+        }
 
         $partners = Partner::orderBy('name')->get();
 
@@ -104,8 +138,14 @@ new class extends Component
     {
         $this->reset(['editingId', 'name', 'description', 'partnerId', 'kodimId', 'koramilId', 'locationId', 'startDate', 'endDate', 'status']);
         $this->status = 'planning';
-        $this->startDate = '2025-11-01';
-        $this->endDate = '2026-01-31';
+        $this->startDate = Setting::get('project.default_start_date', '2025-11-01');
+        $this->endDate = Setting::get('project.default_end_date', '2026-01-31');
+
+        // Default to first partner (PT Agrinas)
+        $firstPartner = Partner::orderBy('name')->first();
+        if ($firstPartner) {
+            $this->partnerId = $firstPartner->id;
+        }
 
         // For reporters, default to their office
         $user = auth()->user();
@@ -128,6 +168,11 @@ new class extends Component
 
     public function edit(int $id): void
     {
+        // Reporters cannot edit projects
+        if ($this->isReporter()) {
+            abort(403, 'Unauthorized action.');
+        }
+
         $project = Project::findOrFail($id);
         $this->editingId = $project->id;
         $this->name = $project->name;
@@ -138,12 +183,14 @@ new class extends Component
         $this->endDate = $project->end_date?->format('Y-m-d');
         $this->status = $project->status;
 
-        // Load office hierarchy
+        // Load office hierarchy IN THE CORRECT ORDER (Kodim → Koramil → Location)
         if ($project->office) {
-            $this->koramilId = $project->office_id;
+            // Set Kodim FIRST (parent)
             if ($project->office->parent_id) {
                 $this->kodimId = $project->office->parent_id;
             }
+            // Then set Koramil (child)
+            $this->koramilId = $project->office_id;
         }
 
         $this->showModal = true;
@@ -242,6 +289,11 @@ new class extends Component
 
     public function delete(int $id): void
     {
+        // Reporters cannot delete projects
+        if ($this->isReporter()) {
+            abort(403, 'Unauthorized action.');
+        }
+
         Project::findOrFail($id)->delete();
         $this->dispatch('project-deleted');
     }
@@ -284,7 +336,13 @@ new class extends Component
                     <th class="px-4 py-3 text-left text-sm font-semibold">Status</th>
                     <th class="px-4 py-3 text-left text-sm font-semibold">Start Date</th>
                     <th class="px-4 py-3 text-left text-sm font-semibold">End Date</th>
-                    <th class="px-4 py-3 text-right text-sm font-semibold">Actions</th>
+                    <th class="px-4 py-3 text-right text-sm font-semibold">
+                        @if($this->isReporter())
+                            Actual progress %
+                        @else
+                            Actions
+                        @endif
+                    </th>
                 </tr>
             </thead>
             <tbody class="divide-y divide-neutral-200 dark:divide-neutral-700">
@@ -311,20 +369,34 @@ new class extends Component
                         <td class="px-4 py-3 text-sm">{{ $project->start_date?->format('M d, Y') ?? '-' }}</td>
                         <td class="px-4 py-3 text-sm">{{ $project->end_date?->format('M d, Y') ?? '-' }}</td>
                         <td class="px-4 py-3 text-right text-sm">
-                            <div class="flex items-center justify-end gap-2">
-                                <flux:button wire:click="edit({{ $project->id }})" size="sm" variant="ghost">
-                                    Edit
-                                </flux:button>
-                                <flux:button
-                                    wire:click="delete({{ $project->id }})"
-                                    wire:confirm="Are you sure you want to delete this project?"
-                                    size="sm"
-                                    variant="ghost"
-                                    class="text-red-600 hover:text-red-700"
-                                >
-                                    Delete
-                                </flux:button>
-                            </div>
+                            @if(!$this->isReporter())
+                                <div class="flex items-center justify-end gap-2">
+                                    <flux:button wire:click="edit({{ $project->id }})" size="sm" variant="ghost">
+                                        Edit
+                                    </flux:button>
+                                    <flux:button
+                                        wire:click="delete({{ $project->id }})"
+                                        wire:confirm="Are you sure you want to delete this project?"
+                                        size="sm"
+                                        variant="ghost"
+                                        class="text-red-600 hover:text-red-700"
+                                    >
+                                        Delete
+                                    </flux:button>
+                                </div>
+                            @else
+                                <div class="flex items-center justify-end">
+                                    <span class="inline-flex items-center rounded-full px-3 py-1 text-sm font-semibold
+                                        @if($project->actual_progress >= 100) bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300
+                                        @elseif($project->actual_progress >= 75) bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300
+                                        @elseif($project->actual_progress >= 50) bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-300
+                                        @elseif($project->actual_progress > 0) bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-300
+                                        @else bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-300
+                                        @endif">
+                                        {{ number_format($project->actual_progress, 2) }}%
+                                    </span>
+                                </div>
+                            @endif
                         </td>
                     </tr>
                 @empty
@@ -400,19 +472,21 @@ new class extends Component
                 @endforeach
             </flux:select>
 
-            <div class="grid grid-cols-2 gap-4">
-                <flux:input
-                    wire:model="startDate"
-                    label="Start Date"
-                    type="date"
-                />
+            @if(!$this->isReporter())
+                <div class="grid grid-cols-2 gap-4">
+                    <flux:input
+                        wire:model="startDate"
+                        label="Start Date"
+                        type="date"
+                    />
 
-                <flux:input
-                    wire:model="endDate"
-                    label="End Date"
-                    type="date"
-                />
-            </div>
+                    <flux:input
+                        wire:model="endDate"
+                        label="End Date"
+                        type="date"
+                    />
+                </div>
+            @endif
 
             <flux:input
                 wire:model="name"

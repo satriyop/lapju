@@ -35,7 +35,7 @@ class DatabaseSeeder extends Seeder
                 'name' => 'Test User',
                 'email' => 'test@example.com',
                 'nrp' => '31240000',
-                'office_id' => $kodim?->id,
+                // 'office_id' => $kodim?->id,
                 'password' => bcrypt('password'),
                 'is_approved' => true,
                 'approved_at' => now(),
@@ -56,47 +56,53 @@ class DatabaseSeeder extends Seeder
             $this->command->info("Admin role assigned to: {$adminUser->email}");
         }
 
-        // Create reporter user BEFORE ProjectSeeder so projects can use reporter's coverage
+        // Create 5 reporter users BEFORE ProjectSeeder so projects can use reporter's coverage
         $reporterRole = \App\Models\Role::where('name', 'Reporter')->first();
 
-        // Get a Koramil office with geographic coverage (prefer with district, fallback to city coverage)
-        $koramil = \App\Models\Office::whereHas('level', fn ($q) => $q->where('level', 4))
+        // Get 5 different Koramil offices with geographic coverage
+        $koramils = \App\Models\Office::whereHas('level', fn ($q) => $q->where('level', 4))
             ->whereNotNull('coverage_district')
-            ->first();
+            ->orderBy('name')
+            ->limit(5)
+            ->get();
 
-        // Fallback to any Koramil with city coverage
-        if (! $koramil) {
-            $koramil = \App\Models\Office::whereHas('level', fn ($q) => $q->where('level', 4))
-                ->whereNotNull('coverage_city')
-                ->first();
+        // Fallback: get any 5 Koramils if not enough with district coverage
+        if ($koramils->count() < 5) {
+            $koramils = \App\Models\Office::whereHas('level', fn ($q) => $q->where('level', 4))
+                ->orderBy('name')
+                ->limit(5)
+                ->get();
         }
 
-        // Last resort: just get any Koramil
-        if (! $koramil) {
-            $koramil = \App\Models\Office::whereHas('level', fn ($q) => $q->where('level', 4))
-                ->first();
+        $this->command->info('Creating 5 reporter users...');
+
+        // Create 5 reporters
+        $reporters = [];
+        foreach ($koramils as $index => $koramil) {
+            $reporterNumber = $index + 1;
+
+            $reporter = User::updateOrCreate(
+                ['phone' => '08123456789'.($reporterNumber)],
+                [
+                    'name' => "Babinsa {$reporterNumber}",
+                    'email' => "babinsa{$reporterNumber}@example.com",
+                    'nrp' => '3124000'.($reporterNumber),
+                    'password' => bcrypt('password'),
+                    'office_id' => $koramil->id,
+                    'is_approved' => true,
+                    'approved_at' => now(),
+                    'approved_by' => 1,
+                    'is_admin' => false,
+                ]
+            );
+
+            if ($reporterRole && ! $reporter->hasRole($reporterRole)) {
+                $reporter->roles()->attach($reporterRole->id, ['assigned_by' => 1]);
+            }
+
+            $reporters[] = $reporter;
+            $this->command->info("Reporter user created: {$reporter->name} at {$koramil->name}");
         }
-
-        $reporter = User::updateOrCreate(
-            ['phone' => '081234567891'],
-            [
-                'name' => 'Babinsa',
-                'email' => 'babinsa@example.com',
-                'nrp' => '31240001',
-                'password' => bcrypt('password'),
-                'office_id' => $koramil?->id,
-                'is_approved' => true,
-                'approved_at' => now(),
-                'approved_by' => 1,
-                'is_admin' => false,
-            ]
-        );
-
-        if ($reporterRole && ! $reporter->hasRole($reporterRole)) {
-            $reporter->roles()->attach($reporterRole->id, ['assigned_by' => 1]);
-        }
-
-        $this->command->info("Reporter user created: {$reporter->name} at {$koramil?->name}");
 
         // Create Manager users for each Kodim office
         $managerRole = \App\Models\Role::where('name', 'Manager')->first();
@@ -115,11 +121,11 @@ class DatabaseSeeder extends Seeder
             $locationName = explode('/', $kodim->name)[1] ?? "Kodim {$officeCode}";
 
             $manager = User::updateOrCreate(
-                ['phone' => '0812345670' . ($index + 2)],
+                ['phone' => '0812345670'.($index + 2)],
                 [
                     'name' => "Manager {$locationName}",
                     'email' => "kodim{$officeCode}@example.com",
-                    'nrp' => '3124010' . ($index + 2),
+                    'nrp' => '3124010'.($index + 2),
                     'office_id' => $kodim->id,
                     'password' => bcrypt('password'),
                     'is_approved' => true,
@@ -140,6 +146,7 @@ class DatabaseSeeder extends Seeder
         $this->call([
             ProjectSeeder::class,
             ProgressSeeder::class,
+            // ProgressPhotoSeeder::class,
         ]);
     }
 }

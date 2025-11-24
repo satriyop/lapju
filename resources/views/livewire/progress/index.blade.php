@@ -1,12 +1,16 @@
 <?php
 
 use App\Models\Office;
+use App\Models\ProgressPhoto;
 use App\Models\Project;
 use App\Models\Task;
 use App\Models\TaskProgress;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Storage;
+use Livewire\Features\SupportFileUploads\TemporaryUploadedFile;
 use Livewire\Volt\Component;
+use Livewire\WithFileUploads;
 
 use function Livewire\Volt\layout;
 
@@ -14,6 +18,8 @@ layout('components.layouts.app');
 
 new class extends Component
 {
+    use WithFileUploads;
+
     public ?int $selectedProjectId = null;
 
     public ?int $activeTab = null;
@@ -26,17 +32,27 @@ new class extends Component
 
     public string $maxDate;
 
+    public array $photos = [];
+
+    public array $existingPhotos = [];
+
+    public array $photoCaptions = [];
+
     public function mount(): void
     {
         $this->selectedDate = now()->format('Y-m-d');
         $this->maxDate = now()->format('Y-m-d');
 
-        // Auto-select first project if available (with Manager coverage filtering)
+        // Auto-select first project if available (with Reporter and Manager coverage filtering)
         $currentUser = auth()->user();
         $projectQuery = Project::query();
 
+        // Reporters can only see their assigned projects
+        if ($currentUser->hasRole('Reporter')) {
+            $projectQuery->whereHas('users', fn ($q) => $q->where('users.id', $currentUser->id));
+        }
         // Managers at Kodim level can only see projects in Koramils under their Kodim
-        if ($currentUser->hasRole('Manager') && $currentUser->office_id) {
+        elseif ($currentUser->hasRole('Manager') && $currentUser->office_id) {
             $userOffice = Office::with('level')->find($currentUser->office_id);
             if ($userOffice && $userOffice->level->level === 3) {
                 $projectQuery->whereHas('office', function ($q) use ($currentUser) {
@@ -49,6 +65,7 @@ new class extends Component
         if ($firstProject) {
             $this->selectedProjectId = $firstProject->id;
             $this->loadProgressData();
+            $this->loadExistingPhotos();
 
             // Auto-select first root task tab for the selected project
             $rootTasks = Task::where('project_id', $this->selectedProjectId)
@@ -123,7 +140,7 @@ new class extends Component
     }
 
     /**
-     * Calculate recursive average progress for parent tasks.
+     * Calculate average progress for root tasks only by averaging their leaf descendants.
      *
      * @param  \Illuminate\Support\Collection<int, \App\Models\Task>  $allTasks
      * @param  array<int, array>  $latestProgressMap
@@ -136,10 +153,10 @@ new class extends Component
         // Get all leaf tasks (no children)
         $leafTasks = $allTasks->filter(fn ($task) => $task->children->count() === 0);
 
-        // For each parent task, calculate average of its descendants
+        // Only calculate average for root tasks (parent_id = null)
         foreach ($allTasks as $task) {
-            if ($task->children->count() > 0) {
-                // Get all leaf descendants of this parent
+            if ($task->children->count() > 0 && $task->parent_id === null) {
+                // Get all leaf descendants of this root task
                 $leafDescendants = $leafTasks->filter(function ($leaf) use ($task) {
                     return $leaf->_lft > $task->_lft && $leaf->_rgt < $task->_rgt;
                 });
@@ -169,6 +186,7 @@ new class extends Component
     public function updatedSelectedProjectId(): void
     {
         $this->loadProgressData();
+        $this->loadExistingPhotos();
 
         // Reset to first tab when project changes - filter by selected project
         if ($this->selectedProjectId) {
@@ -184,6 +202,9 @@ new class extends Component
 
     public function updatedSelectedDate(): void
     {
+        // Get project to validate date range
+        $project = $this->selectedProjectId ? Project::find($this->selectedProjectId) : null;
+
         // Validate that date is not in the future
         if ($this->selectedDate > $this->maxDate) {
             $this->selectedDate = $this->maxDate;
@@ -192,12 +213,47 @@ new class extends Component
             return;
         }
 
+        // Validate date is within project date range (if project dates are set)
+        if ($project && $project->start_date && $project->end_date) {
+            $selectedDate = Carbon::parse($this->selectedDate);
+            $projectStart = Carbon::parse($project->start_date)->startOfDay();
+            $projectEnd = Carbon::parse($project->end_date)->endOfDay();
+
+            if ($selectedDate->lt($projectStart)) {
+                $this->selectedDate = $projectStart->format('Y-m-d');
+                $this->addError(
+                    'selectedDate',
+                    'Progress date adjusted to project start date ('.$projectStart->format('M d, Y').').'
+                );
+            } elseif ($selectedDate->gt($projectEnd)) {
+                $this->selectedDate = $projectEnd->format('Y-m-d');
+                $this->addError(
+                    'selectedDate',
+                    'Progress date adjusted to project end date ('.$projectEnd->format('M d, Y').').'
+                );
+            }
+        }
+
         $this->loadProgressData();
+        $this->loadExistingPhotos();
     }
 
     public function setActiveTab(int $taskId): void
     {
         $this->activeTab = $taskId;
+
+        // Auto-expand all descendant parent tasks (not leaf tasks) under this root task
+        $rootTask = Task::find($taskId);
+        if ($rootTask) {
+            $descendantParentTasks = Task::where('project_id', $rootTask->project_id)
+                ->where('_lft', '>', $rootTask->_lft)
+                ->where('_rgt', '<', $rootTask->_rgt)
+                ->whereHas('children') // Only parent tasks (have children)
+                ->pluck('id')
+                ->toArray();
+
+            $this->expandedTasks = array_unique(array_merge($this->expandedTasks, $descendantParentTasks));
+        }
     }
 
     public function toggleExpand(int $taskId): void
@@ -215,11 +271,39 @@ new class extends Component
             return;
         }
 
+        // Get project to validate date range
+        $project = Project::find($this->selectedProjectId);
+
         // Validate date is not in the future
         if ($this->selectedDate > $this->maxDate) {
             $this->addError('selectedDate', 'Cannot save progress for future dates.');
 
             return;
+        }
+
+        // Validate date is within project date range (if project dates are set)
+        if ($project && $project->start_date && $project->end_date) {
+            $selectedDate = Carbon::parse($this->selectedDate);
+            $projectStart = Carbon::parse($project->start_date)->startOfDay();
+            $projectEnd = Carbon::parse($project->end_date)->endOfDay();
+
+            if ($selectedDate->lt($projectStart)) {
+                $this->addError(
+                    'selectedDate',
+                    'Progress date must be on or after project start date ('.$projectStart->format('M d, Y').').'
+                );
+
+                return;
+            }
+
+            if ($selectedDate->gt($projectEnd)) {
+                $this->addError(
+                    'selectedDate',
+                    'Progress date must be on or before project end date ('.$projectEnd->format('M d, Y').').'
+                );
+
+                return;
+            }
         }
 
         $data = $this->progressData[$taskId] ?? ['percentage' => 0, 'notes' => ''];
@@ -253,13 +337,153 @@ new class extends Component
         $this->dispatch('progress-updated');
     }
 
+    public function loadExistingPhotos(): void
+    {
+        if (! $this->selectedProjectId) {
+            return;
+        }
+
+        $photos = ProgressPhoto::where('project_id', $this->selectedProjectId)
+            ->whereDate('photo_date', $this->selectedDate)
+            ->with('rootTask:id,name')
+            ->get();
+
+        $this->existingPhotos = $photos->keyBy('root_task_id')->toArray();
+    }
+
+    public function uploadPhoto(int $rootTaskId): void
+    {
+        if (! isset($this->photos[$rootTaskId])) {
+            return;
+        }
+
+        // Get project to validate date range
+        $project = Project::find($this->selectedProjectId);
+
+        // Validate date is within project date range (if project dates are set)
+        if ($project && $project->start_date && $project->end_date) {
+            $selectedDate = Carbon::parse($this->selectedDate);
+            $projectStart = Carbon::parse($project->start_date)->startOfDay();
+            $projectEnd = Carbon::parse($project->end_date)->endOfDay();
+
+            if ($selectedDate->lt($projectStart) || $selectedDate->gt($projectEnd)) {
+                $this->addError(
+                    "photos.{$rootTaskId}",
+                    'Photo date must be within project date range ('.$projectStart->format('M d, Y').' to '.$projectEnd->format('M d, Y').').'
+                );
+
+                return;
+            }
+        }
+
+        // Validate that the root task has descendant progress
+        $rootTask = Task::find($rootTaskId);
+        if (! $rootTask || ! $rootTask->hasAnyDescendantProgress()) {
+            $this->addError("photos.{$rootTaskId}", 'Cannot upload photo. Please enter progress for this task first.');
+
+            return;
+        }
+
+        $this->validate([
+            "photos.{$rootTaskId}" => 'required|image|max:5120|mimes:jpeg,jpg,png,webp',
+        ], [
+            "photos.{$rootTaskId}.required" => 'Please select an image.',
+            "photos.{$rootTaskId}.image" => 'File must be an image.',
+            "photos.{$rootTaskId}.max" => 'Image must not exceed 5MB.',
+            "photos.{$rootTaskId}.mimes" => 'Image must be jpeg, jpg, png, or webp format.',
+        ]);
+
+        $photo = $this->photos[$rootTaskId];
+
+        if ($photo instanceof TemporaryUploadedFile) {
+            // Get image dimensions
+            [$width, $height] = getimagesize($photo->getRealPath());
+
+            // Generate file path
+            $date = Carbon::parse($this->selectedDate);
+            $hash = md5($this->selectedProjectId.$rootTaskId.$date->format('Y-m-d').time());
+            $extension = $photo->extension();
+            $fileName = "{$this->selectedProjectId}_{$rootTaskId}_{$date->format('Y-m-d')}_{$hash}.{$extension}";
+            $directory = "progress/{$this->selectedProjectId}/{$date->format('Y-m-d')}";
+            $filePath = "{$directory}/{$fileName}";
+
+            // Store the file
+            $photo->storeAs($directory, $fileName, 'public');
+
+            // Save to database
+            ProgressPhoto::updateOrCreate(
+                [
+                    'project_id' => $this->selectedProjectId,
+                    'root_task_id' => $rootTaskId,
+                    'photo_date' => $date,
+                ],
+                [
+                    'user_id' => Auth::id(),
+                    'file_path' => $filePath,
+                    'file_name' => $fileName,
+                    'file_size' => $photo->getSize(),
+                    'mime_type' => $photo->getMimeType(),
+                    'width' => $width,
+                    'height' => $height,
+                    'caption' => $this->photoCaptions[$rootTaskId] ?? null,
+                ]
+            );
+
+            // Clear the upload
+            unset($this->photos[$rootTaskId]);
+            unset($this->photoCaptions[$rootTaskId]);
+
+            // Reload photos
+            $this->loadExistingPhotos();
+
+            $this->dispatch('photo-uploaded');
+        }
+    }
+
+    public function removePhotoPreview(int $rootTaskId): void
+    {
+        unset($this->photos[$rootTaskId]);
+        unset($this->photoCaptions[$rootTaskId]);
+    }
+
+    public function deletePhoto(int $photoId): void
+    {
+        $photo = ProgressPhoto::find($photoId);
+
+        if (! $photo) {
+            return;
+        }
+
+        // Check if user can edit (same day and own photo)
+        if (! $photo->canEdit()) {
+            $this->addError('photo', 'You can only delete photos uploaded today.');
+
+            return;
+        }
+
+        // Delete file from storage
+        $photo->deleteFile();
+
+        // Delete from database
+        $photo->delete();
+
+        // Reload photos
+        $this->loadExistingPhotos();
+
+        $this->dispatch('photo-deleted');
+    }
+
     public function with(): array
     {
         $currentUser = auth()->user();
         $projectsQuery = Project::with('location', 'partner');
 
+        // Reporters can only see their assigned projects
+        if ($currentUser->hasRole('Reporter')) {
+            $projectsQuery->whereHas('users', fn ($q) => $q->where('users.id', $currentUser->id));
+        }
         // Managers at Kodim level can only see projects in Koramils under their Kodim
-        if ($currentUser->hasRole('Manager') && $currentUser->office_id) {
+        elseif ($currentUser->hasRole('Manager') && $currentUser->office_id) {
             $userOffice = Office::with('level')->find($currentUser->office_id);
             if ($userOffice && $userOffice->level->level === 3) {
                 $projectsQuery->whereHas('office', function ($q) use ($currentUser) {
@@ -292,12 +516,16 @@ new class extends Component
         // Calculate parent task progress (including root tasks)
         $parentProgressMap = $this->calculateParentProgress($allTasks, $latestProgressMap);
 
+        // Get selected project for date range display
+        $selectedProject = $this->selectedProjectId ? Project::find($this->selectedProjectId) : null;
+
         return [
             'projects' => $projects,
             'rootTasks' => $rootTasks,
             'allTasks' => $allTasks,
             'latestProgressMap' => $latestProgressMap,
             'parentProgressMap' => $parentProgressMap,
+            'selectedProject' => $selectedProject,
         ];
     }
 }; ?>
@@ -328,17 +556,41 @@ new class extends Component
             <div>
                 <label class="mb-1 block text-xs font-medium text-neutral-700 dark:text-neutral-300">
                     Progress Date
-                    <span class="text-neutral-500">(no future dates)</span>
+                    @if($selectedProject && $selectedProject->start_date && $selectedProject->end_date)
+                        <span class="text-neutral-500">({{ \Carbon\Carbon::parse($selectedProject->start_date)->format('M d, Y') }} - {{ \Carbon\Carbon::parse($selectedProject->end_date)->format('M d, Y') }})</span>
+                    @else
+                        <span class="text-neutral-500">(no future dates)</span>
+                    @endif
                 </label>
+                @php
+                    $maxAllowedDate = $maxDate;
+                    if ($selectedProject && $selectedProject->end_date) {
+                        $projectEnd = \Carbon\Carbon::parse($selectedProject->end_date)->format('Y-m-d');
+                        if ($projectEnd < $maxDate) {
+                            $maxAllowedDate = $projectEnd;
+                        }
+                    }
+
+                    $minAllowedDate = '';
+                    if ($selectedProject && $selectedProject->start_date) {
+                        $minAllowedDate = \Carbon\Carbon::parse($selectedProject->start_date)->format('Y-m-d');
+                    }
+                @endphp
                 <flux:input
                     wire:model.live="selectedDate"
                     type="date"
-                    max="{{ $maxDate }}"
+                    min="{{ $minAllowedDate }}"
+                    max="{{ $maxAllowedDate }}"
                     class="w-full"
                 />
                 @error('selectedDate')
                     <p class="mt-1 text-xs text-red-600 dark:text-red-400">{{ $message }}</p>
                 @enderror
+                @if($selectedProject && $selectedProject->start_date && $selectedProject->end_date)
+                    <p class="mt-1 text-xs text-neutral-600 dark:text-neutral-400">
+                        Project timeline: {{ \Carbon\Carbon::parse($selectedProject->start_date)->format('M d, Y') }} to {{ \Carbon\Carbon::parse($selectedProject->end_date)->format('M d, Y') }}
+                    </p>
+                @endif
             </div>
         </div>
 
@@ -492,13 +744,16 @@ new class extends Component
                                                         </div>
                                                     @endif
                                                 </div>
-                                                <div class="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-neutral-600 dark:text-neutral-400">
-                                                    <span>Vol: {{ number_format($task->volume, 2) }} {{ $task->unit ?? '' }}</span>
-                                                    <span>•</span>
-                                                    <span>Weight: {{ number_format($task->weight, 2) }}</span>
-                                                    <span>•</span>
-                                                    <span>Price: {{ number_format($task->price, 0) }}</span>
-                                                </div>
+
+                                                @if(!$task->has_children)
+                                                    <div class="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-neutral-600 dark:text-neutral-400">
+                                                        <span>Vol: {{ number_format($task->volume, 2) }} {{ $task->unit ?? '' }}</span>
+                                                        <span>•</span>
+                                                        <span>Weight: {{ number_format($task->weight, 2) }}</span>
+                                                        <span>•</span>
+                                                        <span>Price: {{ number_format($task->price, 0) }}</span>
+                                                    </div>
+                                                @endif
 
                                                 @if($parentProgress)
                                                     <div class="mt-2 h-2 w-full overflow-hidden rounded-full bg-neutral-200 dark:bg-neutral-600">
@@ -607,6 +862,175 @@ new class extends Component
                                 </div>
                             @endif
                         @endforeach
+
+                        <!-- Photo Upload Section (Only for Root Tasks) -->
+                        <div class="mt-4 rounded-xl border border-neutral-300 bg-white p-4 shadow-sm dark:border-neutral-600 dark:bg-neutral-800">
+                            <div class="mb-3 flex items-center justify-between">
+                                <h3 class="font-semibold text-neutral-900 dark:text-neutral-100">
+                                    Progress Photo
+                                </h3>
+                                <svg class="h-5 w-5 text-neutral-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"></path>
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                                </svg>
+                            </div>
+
+                            @php
+                                $existingPhoto = $existingPhotos[$rootTask->id] ?? null;
+                                $hasPreview = isset($photos[$rootTask->id]);
+                                $hasDescendantProgress = $rootTask->hasAnyDescendantProgress();
+                            @endphp
+
+                            @if(!$hasDescendantProgress)
+                                <!-- No Progress Message -->
+                                <div class="rounded-lg border border-yellow-300 bg-yellow-50 p-4 text-center dark:border-yellow-600 dark:bg-yellow-900/20">
+                                    <svg class="mx-auto h-10 w-10 text-yellow-600 dark:text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+                                    </svg>
+                                    <p class="mt-2 text-sm font-medium text-yellow-800 dark:text-yellow-300">
+                                        Progress Required
+                                    </p>
+                                    <p class="mt-1 text-xs text-yellow-700 dark:text-yellow-400">
+                                        Please enter progress for this task's child tasks before uploading a photo.
+                                    </p>
+                                </div>
+                            @else
+
+                            <!-- Existing Photo Display -->
+                            @if($existingPhoto && !$hasPreview)
+                                <div class="space-y-3">
+                                    <div class="relative overflow-hidden rounded-lg border border-neutral-200 dark:border-neutral-700">
+                                        <img
+                                            src="{{ Storage::url($existingPhoto['file_path']) }}"
+                                            alt="Progress photo"
+                                            class="w-full cursor-pointer object-cover"
+                                            onclick="document.getElementById('lightbox-{{ $rootTask->id }}').classList.remove('hidden')"
+                                            style="max-height: 300px"
+                                        />
+                                        @if($existingPhoto['caption'])
+                                            <div class="bg-black/60 p-2 text-xs text-white">
+                                                {{ $existingPhoto['caption'] }}
+                                            </div>
+                                        @endif
+                                    </div>
+
+                                    <div class="flex items-center justify-between text-xs text-neutral-600 dark:text-neutral-400">
+                                        <span>
+                                            Uploaded: {{ \Carbon\Carbon::parse($existingPhoto['created_at'])->format('M d, Y g:i A') }}
+                                        </span>
+                                        @if(\Carbon\Carbon::parse($existingPhoto['created_at'])->isToday() && $existingPhoto['user_id'] === auth()->id())
+                                            <flux:button
+                                                wire:click="deletePhoto({{ $existingPhoto['id'] }})"
+                                                wire:confirm="Delete this photo?"
+                                                size="sm"
+                                                variant="danger"
+                                            >
+                                                Delete
+                                            </flux:button>
+                                        @endif
+                                    </div>
+
+                                    <!-- Lightbox Modal -->
+                                    <div id="lightbox-{{ $rootTask->id }}" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/90 p-4" onclick="this.classList.add('hidden')">
+                                        <div class="relative max-h-full max-w-full">
+                                            <img
+                                                src="{{ Storage::url($existingPhoto['file_path']) }}"
+                                                alt="Progress photo full size"
+                                                class="max-h-screen max-w-full rounded-lg"
+                                            />
+                                            <button
+                                                class="absolute right-4 top-4 rounded-full bg-white/20 p-2 text-white hover:bg-white/30"
+                                                onclick="document.getElementById('lightbox-{{ $rootTask->id }}').classList.add('hidden')"
+                                            >
+                                                <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                                                </svg>
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            @endif
+
+                            <!-- Photo Preview (Before Upload) -->
+                            @if($hasPreview)
+                                <div class="space-y-3">
+                                    <div class="relative overflow-hidden rounded-lg border border-blue-300 dark:border-blue-700">
+                                        @if($photos[$rootTask->id])
+                                            <img
+                                                src="{{ $photos[$rootTask->id]->temporaryUrl() }}"
+                                                alt="Preview"
+                                                class="w-full object-cover"
+                                                style="max-height: 300px"
+                                            />
+                                        @endif
+                                        <button
+                                            wire:click="removePhotoPreview({{ $rootTask->id }})"
+                                            class="absolute right-2 top-2 rounded-full bg-red-500 p-1.5 text-white hover:bg-red-600"
+                                        >
+                                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                                            </svg>
+                                        </button>
+                                    </div>
+
+                                    <!-- Caption Input -->
+                                    <flux:input
+                                        wire:model="photoCaptions.{{ $rootTask->id }}"
+                                        type="text"
+                                        placeholder="Add a caption (optional)..."
+                                        class="w-full"
+                                    />
+
+                                    <!-- Upload Button -->
+                                    <flux:button
+                                        wire:click="uploadPhoto({{ $rootTask->id }})"
+                                        variant="primary"
+                                        class="w-full"
+                                        wire:loading.attr="disabled"
+                                        wire:target="uploadPhoto"
+                                    >
+                                        <span wire:loading.remove wire:target="uploadPhoto">Upload Photo</span>
+                                        <span wire:loading wire:target="uploadPhoto">Uploading...</span>
+                                    </flux:button>
+
+                                    @error("photos.{$rootTask->id}")
+                                        <p class="text-sm text-red-600 dark:text-red-400">{{ $message }}</p>
+                                    @enderror
+                                </div>
+                            @endif
+
+                            <!-- Upload Button (No Photo) -->
+                            @if(!$existingPhoto && !$hasPreview)
+                                <div class="text-center">
+                                    <label for="photo-{{ $rootTask->id }}" class="block cursor-pointer">
+                                        <div class="rounded-lg border-2 border-dashed border-neutral-300 p-6 transition-colors hover:border-blue-500 hover:bg-blue-50 dark:border-neutral-600 dark:hover:border-blue-500 dark:hover:bg-blue-900/20">
+                                            <svg class="mx-auto h-12 w-12 text-neutral-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"></path>
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                                            </svg>
+                                            <p class="mt-2 text-sm font-medium text-neutral-700 dark:text-neutral-300">
+                                                Tap to add photo
+                                            </p>
+                                            <p class="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
+                                                PNG, JPG, WEBP up to 5MB
+                                            </p>
+                                        </div>
+                                    </label>
+                                    <input
+                                        type="file"
+                                        id="photo-{{ $rootTask->id }}"
+                                        wire:model="photos.{{ $rootTask->id }}"
+                                        accept="image/*"
+                                        capture="camera"
+                                        class="hidden"
+                                    />
+                                    <div wire:loading wire:target="photos.{{ $rootTask->id }}" class="mt-2 text-sm text-blue-600">
+                                        Processing...
+                                    </div>
+                                </div>
+                            @endif
+                            @endif
+                        </div>
                     </div>
                 @endif
             @endforeach
