@@ -15,19 +15,7 @@ class DatabaseSeeder extends Seeder
     {
         // User::factory(10)->create();
 
-        // Create or update admin user
-        $adminUser = User::updateOrCreate(
-            ['email' => 'test@example.com'],
-            [
-                'name' => 'Test User',
-                'password' => bcrypt('password'),
-                'is_approved' => true,
-                'approved_at' => now(),
-                'is_admin' => true,
-            ]
-        );
-
-        // Seed foundational data first (roles, offices, locations)
+        // Seed foundational data first (needed for office_id)
         $this->call([
             RoleSeeder::class,
             OfficeLevelSeeder::class,
@@ -35,6 +23,28 @@ class DatabaseSeeder extends Seeder
             OfficeCoverageSeeder::class,
             TaskTemplateSeeder::class,
             SettingSeeder::class,
+        ]);
+
+        // Get a Kodim office for admin user
+        $kodim = \App\Models\Office::whereHas('level', fn ($q) => $q->where('level', 3))->first();
+
+        // Create or update admin user (using phone as unique identifier)
+        $adminUser = User::updateOrCreate(
+            ['phone' => '081234567890'],
+            [
+                'name' => 'Test User',
+                'email' => 'test@example.com',
+                'nrp' => '31240000',
+                'office_id' => $kodim?->id,
+                'password' => bcrypt('password'),
+                'is_approved' => true,
+                'approved_at' => now(),
+                'is_admin' => true,
+            ]
+        );
+
+        // Seed locations and partners
+        $this->call([
             LocationSeeder::class,
             PartnerSeeder::class,
         ]);
@@ -68,11 +78,11 @@ class DatabaseSeeder extends Seeder
         }
 
         $reporter = User::updateOrCreate(
-            ['email' => 'babinsa@example.com'],
+            ['phone' => '081234567891'],
             [
                 'name' => 'Babinsa',
+                'email' => 'babinsa@example.com',
                 'nrp' => '31240001',
-                'phone' => '081234567890',
                 'password' => bcrypt('password'),
                 'office_id' => $koramil?->id,
                 'is_approved' => true,

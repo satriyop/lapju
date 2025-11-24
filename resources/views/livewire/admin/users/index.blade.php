@@ -22,7 +22,7 @@ new class extends Component
 
     public string $editName = '';
 
-    public string $editEmail = '';
+    public string $editPhone = '';
 
     public string $editNrp = '';
 
@@ -246,7 +246,7 @@ new class extends Component
 
         $this->editingUserId = $user->id;
         $this->editName = $user->name;
-        $this->editEmail = $user->email;
+        $this->editPhone = $user->phone;
         $this->editNrp = $user->nrp ?? '';
         $this->editOfficeId = $user->office_id;
         $this->editIsAdmin = $user->is_admin;
@@ -257,7 +257,7 @@ new class extends Component
     {
         $this->validate([
             'editName' => 'required|string|max:255',
-            'editEmail' => 'required|email|unique:users,email,'.$this->editingUserId,
+            'editPhone' => 'required|string|min:10|max:13|regex:/^08[0-9]{8,11}$/|unique:users,phone,'.$this->editingUserId,
             'editNrp' => 'nullable|string|max:50|unique:users,nrp,'.$this->editingUserId,
             'editOfficeId' => 'nullable|integer|exists:offices,id',
         ]);
@@ -271,14 +271,14 @@ new class extends Component
 
         $user->update([
             'name' => $this->editName,
-            'email' => $this->editEmail,
+            'phone' => $this->editPhone,
             'nrp' => $this->editNrp ?: null,
             'office_id' => $this->editOfficeId,
             'is_admin' => $this->editIsAdmin,
         ]);
 
         $this->showEditModal = false;
-        $this->reset(['editingUserId', 'editName', 'editEmail', 'editNrp', 'editOfficeId', 'editIsAdmin']);
+        $this->reset(['editingUserId', 'editName', 'editPhone', 'editNrp', 'editOfficeId', 'editIsAdmin']);
     }
 
     public function openProjectModal(int $userId): void
@@ -318,7 +318,7 @@ new class extends Component
 
         $query = User::query()
             ->when($this->search, fn ($q) => $q->where('name', 'like', "%{$this->search}%")
-                ->orWhere('email', 'like', "%{$this->search}%")
+                ->orWhere('phone', 'like', "%{$this->search}%")
                 ->orWhere('nrp', 'like', "%{$this->search}%"))
             ->when($this->filter === 'pending', fn ($q) => $q->where('is_approved', false))
             ->when($this->filter === 'approved', fn ($q) => $q->where('is_approved', true))
@@ -433,7 +433,7 @@ new class extends Component
             <flux:input
                 wire:model.live.debounce.300ms="search"
                 type="search"
-                placeholder="Search by name, email, or NRP..."
+                placeholder="Search by name, phone, or NRP..."
             />
         </div>
         <flux:select wire:model.live="filter">
@@ -469,7 +469,7 @@ new class extends Component
                                 </div>
                                 <div>
                                     <div class="font-medium text-neutral-900 dark:text-neutral-100">{{ $user->name }}</div>
-                                    <div class="text-sm text-neutral-500 dark:text-neutral-400">{{ $user->email }}</div>
+                                    <div class="text-sm text-neutral-500 dark:text-neutral-400">{{ $user->phone }}</div>
                                 </div>
                             </div>
                         </td>
@@ -580,10 +580,11 @@ new class extends Component
             />
 
             <flux:input
-                wire:model="editEmail"
-                label="Email Address"
-                type="email"
+                wire:model="editPhone"
+                label="Phone Number"
+                type="tel"
                 required
+                placeholder="08123456789"
             />
 
             <flux:input

@@ -32,12 +32,15 @@ new class extends Component
     {
         $this->validate([
             'name' => ['required', 'string', 'max:255'],
-            'email' => ['required', 'string', 'email', 'max:255', 'unique:users,email'],
+            'email' => ['nullable', 'string', 'email', 'max:255', 'unique:users,email'],
             'nrp' => ['required', 'string', 'max:50', 'unique:users,nrp'],
-            'phone' => ['required', 'string', 'max:20', 'regex:/^[0-9\+\-\s\(\)]+$/'],
+            'phone' => ['required', 'string', 'min:10', 'max:13', 'regex:/^08[0-9]{8,11}$/', 'unique:users,phone'],
             'kodimId' => ['required', 'integer', 'exists:offices,id'],
             'officeId' => ['required', 'integer', 'exists:offices,id'],
             'password' => ['required', 'string', 'min:8', 'confirmed'],
+        ], [
+            'phone.regex' => 'Phone number must start with 08 and contain 10-13 digits.',
+            'phone.unique' => 'This phone number is already registered.',
         ]);
 
         // Verify the selected office belongs to the selected kodim
@@ -106,16 +109,16 @@ new class extends Component
                 <div class="-mt-4 text-sm text-red-600">{{ $message }}</div>
             @enderror
 
-            <!-- Email Address -->
+            <!-- Phone Number -->
             <flux:input
-                wire:model="email"
-                :label="__('Email address')"
-                type="email"
+                wire:model="phone"
+                :label="__('Mobile Phone Number')"
+                type="tel"
                 required
-                autocomplete="email"
-                placeholder="email@example.com"
+                autocomplete="tel"
+                placeholder="08123456789"
             />
-            @error('email')
+            @error('phone')
                 <div class="-mt-4 text-sm text-red-600">{{ $message }}</div>
             @enderror
 
@@ -132,16 +135,15 @@ new class extends Component
                 <div class="-mt-4 text-sm text-red-600">{{ $message }}</div>
             @enderror
 
-            <!-- Phone Number -->
+            <!-- Email Address (Optional) -->
             <flux:input
-                wire:model="phone"
-                :label="__('Mobile Phone Number')"
-                type="tel"
-                required
-                autocomplete="tel"
-                placeholder="08123456789"
+                wire:model="email"
+                :label="__('Email address (Optional)')"
+                type="email"
+                autocomplete="email"
+                placeholder="email@example.com"
             />
-            @error('phone')
+            @error('email')
                 <div class="-mt-4 text-sm text-red-600">{{ $message }}</div>
             @enderror
 
