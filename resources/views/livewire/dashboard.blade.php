@@ -4,6 +4,7 @@ use App\Models\Location;
 use App\Models\Office;
 use App\Models\OfficeLevel;
 use App\Models\Project;
+use App\Models\Setting;
 use App\Models\Task;
 use App\Models\TaskProgress;
 use App\Models\User;
@@ -48,13 +49,7 @@ new class extends Component
 
         // Reporters don't use office filters - just their assigned projects
         if ($currentUser->hasRole('Reporter')) {
-            // Auto-select first project assigned to this reporter
-            $firstProject = $currentUser->projects()->first();
-            if ($firstProject) {
-                $this->selectedProjectId = $firstProject->id;
-                $this->setProjectDates();
-            }
-
+            // No project selected by default - user must select manually
             return;
         }
 
@@ -357,7 +352,7 @@ new class extends Component
     public function calculateSCurveData(): array
     {
         if (! $this->selectedProjectId) {
-            return ['labels' => [], 'planned' => [], 'actual' => []];
+            return ['labels' => [], 'planned' => [], 'actual' => [], 'delayDays' => 0];
         }
 
         // Get the selected project's planned dates
@@ -370,21 +365,24 @@ new class extends Component
                 ->first();
 
             if (! $dateRange || ! $dateRange->min_date || ! $dateRange->max_date) {
-                return ['labels' => [], 'planned' => [], 'actual' => []];
+                return ['labels' => [], 'planned' => [], 'actual' => [], 'delayDays' => 0];
             }
 
+            $organizationStartDate = Carbon::parse($dateRange->min_date);
             $projectStartDate = Carbon::parse($dateRange->min_date);
             $projectEndDate = Carbon::parse($dateRange->max_date);
         } else {
-            // Use project's planned start and end dates
-            $projectStartDate = Carbon::parse($project->start_date);
+            // Use organizational default as timeline baseline
+            $organizationStartDate = Carbon::parse(Setting::get('project.default_start_date', '2025-11-01'));
+            $projectStartDate = Carbon::parse($project->start_date); // Actual project start
             $projectEndDate = Carbon::parse($project->end_date);
         }
 
-        $totalDays = $projectStartDate->diffInDays($projectEndDate);
+        // Calculate total days from organizational start to project end
+        $totalDays = $organizationStartDate->diffInDays($projectEndDate);
 
         if ($totalDays <= 0) {
-            return ['labels' => [], 'planned' => [], 'actual' => []];
+            return ['labels' => [], 'planned' => [], 'actual' => [], 'delayDays' => 0];
         }
 
         // Calculate planned S-curve (linear distribution based on project timeline)
@@ -394,19 +392,27 @@ new class extends Component
 
         // Determine interval based on duration
         $intervalDays = $totalDays <= 30 ? 1 : ($totalDays <= 90 ? 7 : 14);
-        $currentDate = $projectStartDate->copy();
+
+        // Start X-axis from organizational default, not project start
+        $currentDate = $organizationStartDate->copy();
 
         while ($currentDate <= $projectEndDate) {
-            $daysPassed = $projectStartDate->diffInDays($currentDate);
+            // Calculate planned progress from organizational start
+            $daysPassed = $organizationStartDate->diffInDays($currentDate);
             $labels[] = $currentDate->format('M d');
 
-            // Planned: Linear distribution (percentage of time passed based on PROJECT timeline)
+            // Planned: Linear distribution (percentage of time passed based on ORGANIZATIONAL timeline)
             $plannedPercentage = min(($daysPassed / $totalDays) * 100, 100);
             $plannedData[] = round($plannedPercentage, 2);
 
-            // Actual: Calculate cumulative weighted progress up to this date
-            $actualPercentage = $this->calculateActualProgress($currentDate);
-            $actualData[] = round($actualPercentage, 2);
+            // Actual: Show 0% before project actual start date
+            if ($currentDate->lt($projectStartDate)) {
+                $actualData[] = 0;
+            } else {
+                // After project start - calculate real progress
+                $actualPercentage = $this->calculateActualProgress($currentDate);
+                $actualData[] = round($actualPercentage, 2);
+            }
 
             $currentDate->addDays($intervalDays);
         }
@@ -415,13 +421,24 @@ new class extends Component
         if ($currentDate->subDays($intervalDays) < $projectEndDate) {
             $labels[] = $projectEndDate->format('M d');
             $plannedData[] = 100;
-            $actualData[] = round($this->calculateActualProgress($projectEndDate), 2);
+
+            if ($projectEndDate->lt($projectStartDate)) {
+                $actualData[] = 0;
+            } else {
+                $actualData[] = round($this->calculateActualProgress($projectEndDate), 2);
+            }
         }
+
+        // Calculate delay for UI display
+        $delayDays = $organizationStartDate->diffInDays($projectStartDate);
 
         return [
             'labels' => $labels,
             'planned' => $plannedData,
             'actual' => $actualData,
+            'delayDays' => max(0, $delayDays),
+            'actualStartDate' => $projectStartDate->format('M d, Y'),
+            'plannedStartDate' => $organizationStartDate->format('M d, Y'),
         ];
     }
 
@@ -1095,6 +1112,23 @@ new class extends Component
             @if(!empty($sCurveData['labels']))
                 <div class="rounded-xl border border-neutral-200 bg-white p-6 dark:border-neutral-700 dark:bg-neutral-900" wire:key="scurve-{{ $selectedProjectId }}-{{ md5(json_encode($sCurveData)) }}">
                     <flux:heading size="lg" class="mb-4">S-Curve Progress</flux:heading>
+
+                    @if($sCurveData && isset($sCurveData['delayDays']) && $sCurveData['delayDays'] > 0)
+                        <div class="mb-4 rounded-lg border border-amber-300 bg-amber-50 p-3 dark:border-amber-700 dark:bg-amber-900/20">
+                            <div class="flex items-center gap-2">
+                                <svg class="h-5 w-5 flex-shrink-0 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+                                </svg>
+                                <span class="text-sm font-medium text-amber-800 dark:text-amber-200">
+                                    Project started {{ $sCurveData['delayDays'] }} day{{ $sCurveData['delayDays'] > 1 ? 's' : '' }} after planned date
+                                </span>
+                            </div>
+                            <p class="mt-1 text-xs text-amber-700 dark:text-amber-300">
+                                Planned: {{ $sCurveData['plannedStartDate'] }} • Actual: {{ $sCurveData['actualStartDate'] }}
+                            </p>
+                        </div>
+                    @endif
+
                     <div class="relative h-80">
                         <canvas
                             x-data="{
