@@ -121,7 +121,7 @@ new class extends Component
     {
         $currentUser = auth()->user();
         $projectsQuery = Project::query()
-            ->with(['partner', 'location', 'office'])
+            ->with(['partner', 'location', 'office.parent', 'office.level', 'users'])
             ->when($this->search, fn ($query) => $query->where('name', 'like', "%{$this->search}%"));
 
         // Reporters can only see their assigned projects
@@ -421,6 +421,7 @@ new class extends Component
                     <th class="px-4 py-3 text-left text-sm font-semibold">Status</th>
                     <th class="px-4 py-3 text-left text-sm font-semibold">Start Date</th>
                     <th class="px-4 py-3 text-left text-sm font-semibold">End Date</th>
+                    <th class="px-4 py-3 text-left text-sm font-semibold">Assigned Users</th>
                     <th class="px-4 py-3 text-right text-sm font-semibold">
                         @if($this->isReporter())
                             Actual progress %
@@ -436,7 +437,16 @@ new class extends Component
                         class="hover:bg-neutral-50 dark:hover:bg-neutral-800/50">
                         <td class="px-4 py-3 text-sm font-medium">{{ $project->name }}</td>
                         <td class="px-4 py-3 text-sm">{{ $project->partner->name }}</td>
-                        <td class="px-4 py-3 text-sm">{{ $project->office?->name ?? '-' }}</td>
+                        <td class="px-4 py-3 text-sm">
+                            @if($project->office)
+                                <div class="font-medium">{{ $project->office->name }}</div>
+                                @if($project->office->parent)
+                                    <div class="text-xs text-neutral-500">{{ $project->office->parent->name }}</div>
+                                @endif
+                            @else
+                                <span class="text-neutral-400">-</span>
+                            @endif
+                        </td>
                         <td class="px-4 py-3 text-sm">
                             <div class="font-medium">{{ $project->location->village_name }}</div>
                             <div class="text-xs text-neutral-500">{{ $project->location->district_name }}</div>
@@ -453,6 +463,19 @@ new class extends Component
                         </td>
                         <td class="px-4 py-3 text-sm">{{ $project->start_date?->format('M d, Y') ?? '-' }}</td>
                         <td class="px-4 py-3 text-sm">{{ $project->end_date?->format('M d, Y') ?? '-' }}</td>
+                        <td class="px-4 py-3 text-sm">
+                            @if($project->users->isNotEmpty())
+                                <div class="flex flex-wrap gap-1">
+                                    @foreach($project->users as $user)
+                                        <flux:badge size="sm" class="bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300">
+                                            {{ $user->name }}
+                                        </flux:badge>
+                                    @endforeach
+                                </div>
+                            @else
+                                <span class="text-neutral-400 dark:text-neutral-500">None</span>
+                            @endif
+                        </td>
                         <td class="px-4 py-3 text-right text-sm">
                             @if($this->canManageProject($project))
                                 <div class="flex items-center justify-end gap-2">
@@ -486,7 +509,7 @@ new class extends Component
                     </tr>
                 @empty
                     <tr>
-                        <td colspan="8" class="px-4 py-8 text-center text-sm text-neutral-500">
+                        <td colspan="9" class="px-4 py-8 text-center text-sm text-neutral-500">
                             No projects found.
                         </td>
                     </tr>

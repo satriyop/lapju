@@ -319,6 +319,41 @@ new class extends Component
         $this->reset(['projectUserId', 'selectedProjects']);
     }
 
+    private function getAvailableProjectsForAssignment()
+    {
+        $currentUser = auth()->user();
+        $query = Project::with(['location', 'partner', 'office']);
+
+        // Admins see all projects
+        if ($currentUser->isAdmin() || $currentUser->hasPermission('*')) {
+            return $query->orderBy('name')->get();
+        }
+
+        // Get current user's office for coverage filtering
+        if (! $currentUser->office_id) {
+            return collect(); // No office = no projects
+        }
+
+        $currentOffice = Office::with('level')->find($currentUser->office_id);
+
+        if (! $currentOffice) {
+            return collect();
+        }
+
+        // Kodim Admins: Only projects in Koramils under their Kodim
+        if ($currentOffice->level->level === 3) {
+            $query->whereHas('office', function ($q) use ($currentUser) {
+                $q->where('parent_id', $currentUser->office_id);
+            });
+        }
+        // Koramil Admins: Only projects in their exact Koramil
+        elseif ($currentOffice->level->level === 4) {
+            $query->where('office_id', $currentUser->office_id);
+        }
+
+        return $query->orderBy('name')->get();
+    }
+
     public function deleteUser(int $userId): void
     {
         $user = User::findOrFail($userId);
@@ -457,7 +492,8 @@ new class extends Component
             ->when($this->filter === 'pending', fn ($q) => $q->where('is_approved', false))
             ->when($this->filter === 'approved', fn ($q) => $q->where('is_approved', true))
             ->when($this->filter === 'admin', fn ($q) => $q->where('is_admin', true))
-            ->with('approvedBy', 'projects', 'office.parent', 'office.level', 'roles');
+            ->with('approvedBy', 'projects', 'office.parent', 'office.level', 'roles')
+            ->withCount('projects');
 
         // Managers can only see users under their Kodim coverage
         // Koramil Admins can only see users in their exact office
@@ -492,7 +528,7 @@ new class extends Component
             }
         }
         $pendingCount = $pendingCountQuery->count();
-        $projects = Project::with('location', 'partner')->orderBy('name')->get();
+        $projects = $this->getAvailableProjectsForAssignment();
 
         // Get all offices grouped by level for the edit modal
         $offices = Office::with('parent', 'level')
@@ -645,7 +681,6 @@ new class extends Component
                     <th class="px-4 py-3 text-left text-sm font-medium text-neutral-900 dark:text-neutral-100">Office</th>
                     <th class="px-4 py-3 text-left text-sm font-medium text-neutral-900 dark:text-neutral-100">Status</th>
                     <th class="px-4 py-3 text-left text-sm font-medium text-neutral-900 dark:text-neutral-100">Projects</th>
-                    <th class="px-4 py-3 text-left text-sm font-medium text-neutral-900 dark:text-neutral-100">Registered</th>
                     <th class="px-4 py-3 text-right text-sm font-medium text-neutral-900 dark:text-neutral-100">Actions</th>
                 </tr>
             </thead>
@@ -654,7 +689,7 @@ new class extends Component
                     @include('livewire.admin.users.partials.office-node', ['node' => $officeNode, 'level' => 0])
                 @empty
                     <tr>
-                        <td colspan="8" class="px-4 py-8 text-center text-sm text-neutral-500">
+                        <td colspan="7" class="px-4 py-8 text-center text-sm text-neutral-500">
                             No users found.
                         </td>
                     </tr>

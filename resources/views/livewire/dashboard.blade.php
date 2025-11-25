@@ -92,13 +92,6 @@ new class extends Component
                 $this->selectedKoremId = $korem074->id;
             }
         }
-
-        // Auto-select first project
-        $firstProject = Project::first();
-        if ($firstProject) {
-            $this->selectedProjectId = $firstProject->id;
-            $this->setProjectDates();
-        }
     }
 
     public function updatedSelectedProjectId(): void
@@ -352,9 +345,14 @@ new class extends Component
     public function calculateSCurveData(): array
     {
         if (! $this->selectedProjectId) {
-            return ['labels' => [], 'planned' => [], 'actual' => [], 'delayDays' => 0];
+            return $this->calculateAggregatedSCurveData();
         }
 
+        return $this->calculateSingleProjectSCurve();
+    }
+
+    private function calculateSingleProjectSCurve(): array
+    {
         // Get the selected project's planned dates
         $project = Project::find($this->selectedProjectId);
 
@@ -440,6 +438,142 @@ new class extends Component
             'actualStartDate' => $projectStartDate->format('M d, Y'),
             'plannedStartDate' => $organizationStartDate->format('M d, Y'),
         ];
+    }
+
+    private function calculateAggregatedSCurveData(): array
+    {
+        // Get all filtered projects
+        $projects = $this->getFilteredProjects();
+
+        if ($projects->isEmpty()) {
+            return [
+                'labels' => [],
+                'planned' => [],
+                'actual' => [],
+                'delayDays' => 0,
+                'projectCount' => 0,
+            ];
+        }
+
+        // Use organizational default dates for consistent timeline
+        $organizationStartDate = Carbon::parse(Setting::get('project.default_start_date', '2025-11-01'));
+        $organizationEndDate = Carbon::parse(Setting::get('project.default_end_date', '2026-01-31'));
+
+        // Calculate total days
+        $totalDays = $organizationStartDate->diffInDays($organizationEndDate);
+
+        if ($totalDays <= 0) {
+            return [
+                'labels' => [],
+                'planned' => [],
+                'actual' => [],
+                'delayDays' => 0,
+                'projectCount' => $projects->count(),
+            ];
+        }
+
+        // Determine interval based on duration
+        $intervalDays = $totalDays <= 30 ? 1 : ($totalDays <= 90 ? 7 : 14);
+
+        $labels = [];
+        $plannedData = [];
+        $actualData = [];
+
+        $currentDate = $organizationStartDate->copy();
+
+        while ($currentDate <= $organizationEndDate) {
+            $daysPassed = $organizationStartDate->diffInDays($currentDate);
+            $labels[] = $currentDate->format('M d');
+
+            // Planned: Simple linear progression (same for all projects)
+            $plannedPercentage = min(($daysPassed / $totalDays) * 100, 100);
+            $plannedData[] = round($plannedPercentage, 2);
+
+            // Actual: Calculate average across all projects
+            $totalProgress = 0;
+            $validProjects = 0;
+
+            foreach ($projects as $project) {
+                // Check if project has started by this date
+                if ($project->start_date && $currentDate->lt(Carbon::parse($project->start_date))) {
+                    // Project hasn't started yet, counts as 0%
+                    $validProjects++;
+                } else {
+                    // Calculate this project's progress at this date
+                    $projectProgress = $this->calculateProjectProgressAtDate($project, $currentDate);
+                    $totalProgress += $projectProgress;
+                    $validProjects++;
+                }
+            }
+
+            $averageProgress = $validProjects > 0 ? $totalProgress / $validProjects : 0;
+            $actualData[] = round($averageProgress, 2);
+
+            $currentDate->addDays($intervalDays);
+        }
+
+        // Ensure we have the end date
+        if ($currentDate->subDays($intervalDays) < $organizationEndDate) {
+            $labels[] = $organizationEndDate->format('M d');
+            $plannedData[] = 100;
+
+            // Calculate final average progress
+            $totalProgress = 0;
+            $validProjects = 0;
+
+            foreach ($projects as $project) {
+                $projectProgress = $this->calculateProjectActualProgress($project);
+                $totalProgress += $projectProgress;
+                $validProjects++;
+            }
+
+            $averageProgress = $validProjects > 0 ? $totalProgress / $validProjects : 0;
+            $actualData[] = round($averageProgress, 2);
+        }
+
+        return [
+            'labels' => $labels,
+            'planned' => $plannedData,
+            'actual' => $actualData,
+            'delayDays' => 0, // Will calculate average delay separately
+            'projectCount' => $projects->count(),
+        ];
+    }
+
+    private function calculateProjectProgressAtDate(Project $project, Carbon $date): float
+    {
+        // Get all leaf tasks for the project
+        $leafTasks = Task::where('project_id', $project->id)
+            ->whereDoesntHave('children')
+            ->get();
+
+        if ($leafTasks->isEmpty()) {
+            return 0;
+        }
+
+        $totalWeight = $leafTasks->sum('weight');
+
+        if ($totalWeight == 0) {
+            return 0;
+        }
+
+        $totalWeightedProgress = 0;
+
+        foreach ($leafTasks as $task) {
+            // Get the latest progress on or before the given date
+            $latestProgress = TaskProgress::where('project_id', $project->id)
+                ->where('task_id', $task->id)
+                ->where('progress_date', '<=', $date->format('Y-m-d'))
+                ->orderBy('progress_date', 'desc')
+                ->first();
+
+            if ($latestProgress) {
+                $taskPercentage = min((float) $latestProgress->percentage, 100);
+                $totalWeightedProgress += ($taskPercentage * $task->weight) / $totalWeight;
+            }
+        }
+
+        return $totalWeightedProgress;
     }
 
     private function calculateActualProgress(Carbon $date): float
@@ -541,6 +675,132 @@ new class extends Component
         usort($projectsWithProgress, fn ($a, $b) => $b['progress'] <=> $a['progress']);
 
         return array_slice($projectsWithProgress, 0, 10);
+    }
+
+    private function getAggregatedOverallProgress(): float
+    {
+        $projects = $this->getFilteredProjects();
+
+        if ($projects->isEmpty()) {
+            return 0;
+        }
+
+        $totalProgress = 0;
+
+        foreach ($projects as $project) {
+            $totalProgress += $this->calculateProjectActualProgress($project);
+        }
+
+        return round($totalProgress / $projects->count(), 2);
+    }
+
+    private function getProjectsOnTrackCount(): int
+    {
+        $projects = $this->getFilteredProjects();
+
+        if ($projects->isEmpty()) {
+            return 0;
+        }
+
+        $organizationStartDate = Carbon::parse(Setting::get('project.default_start_date', '2025-11-01'));
+        $organizationEndDate = Carbon::parse(Setting::get('project.default_end_date', '2026-01-31'));
+        $totalDays = $organizationStartDate->diffInDays($organizationEndDate);
+        $today = Carbon::now();
+        $daysPassed = $organizationStartDate->diffInDays($today);
+        $plannedPercentage = min(($daysPassed / $totalDays) * 100, 100);
+
+        $onTrackCount = 0;
+
+        foreach ($projects as $project) {
+            $actualProgress = $this->calculateProjectActualProgress($project);
+            if ($actualProgress >= $plannedPercentage) {
+                $onTrackCount++;
+            }
+        }
+
+        return $onTrackCount;
+    }
+
+    private function getProjectsBehindCount(): int
+    {
+        $projects = $this->getFilteredProjects();
+
+        if ($projects->isEmpty()) {
+            return 0;
+        }
+
+        $organizationStartDate = Carbon::parse(Setting::get('project.default_start_date', '2025-11-01'));
+        $organizationEndDate = Carbon::parse(Setting::get('project.default_end_date', '2026-01-31'));
+        $totalDays = $organizationStartDate->diffInDays($organizationEndDate);
+        $today = Carbon::now();
+        $daysPassed = $organizationStartDate->diffInDays($today);
+        $plannedPercentage = min(($daysPassed / $totalDays) * 100, 100);
+
+        $behindCount = 0;
+
+        foreach ($projects as $project) {
+            $actualProgress = $this->calculateProjectActualProgress($project);
+            if ($actualProgress < $plannedPercentage) {
+                $behindCount++;
+            }
+        }
+
+        return $behindCount;
+    }
+
+    private function getAverageDelayDays(): int
+    {
+        $projects = $this->getFilteredProjects();
+
+        if ($projects->isEmpty()) {
+            return 0;
+        }
+
+        $totalDelay = 0;
+        $projectsWithDelay = 0;
+
+        $organizationStartDate = Carbon::parse(Setting::get('project.default_start_date', '2025-11-01'));
+
+        foreach ($projects as $project) {
+            if ($project->start_date) {
+                $actualStartDate = Carbon::parse($project->start_date);
+                $delay = $organizationStartDate->diffInDays($actualStartDate);
+                if ($delay > 0) {
+                    $totalDelay += $delay;
+                    $projectsWithDelay++;
+                }
+            }
+        }
+
+        return $projectsWithDelay > 0 ? round($totalDelay / $projectsWithDelay) : 0;
+    }
+
+    private function getProgressDistribution(): array
+    {
+        $projects = $this->getFilteredProjects();
+
+        $distribution = [
+            '0-25' => 0,
+            '25-50' => 0,
+            '50-75' => 0,
+            '75-100' => 0,
+        ];
+
+        foreach ($projects as $project) {
+            $progress = $this->calculateProjectActualProgress($project);
+
+            if ($progress < 25) {
+                $distribution['0-25']++;
+            } elseif ($progress < 50) {
+                $distribution['25-50']++;
+            } elseif ($progress < 75) {
+                $distribution['50-75']++;
+            } else {
+                $distribution['75-100']++;
+            }
+        }
+
+        return $distribution;
     }
 
     private function calculateHierarchicalProgress(): array
@@ -686,7 +946,11 @@ new class extends Component
         // Get top 10 projects with best actual progress (always show, not dependent on selected project)
         $top10Projects = $this->getTop10Projects();
 
-        if (! $this->selectedProjectId || ! $this->startDate || ! $this->endDate) {
+        // Calculate S-curve data (works for both single project and aggregated views)
+        $sCurveData = $this->calculateSCurveData();
+
+        // If no project selected, return early with aggregated data
+        if (! $this->selectedProjectId) {
             return [
                 'projects' => $projects,
                 'kodams' => $kodams,
@@ -698,7 +962,26 @@ new class extends Component
                 'taskProgress' => collect(),
                 'taskProgressByRoot' => [],
                 'hierarchicalProgress' => [],
-                'sCurveData' => ['labels' => [], 'planned' => [], 'actual' => []],
+                'sCurveData' => $sCurveData,
+                'tasksWithoutProgress' => [],
+                'top10Projects' => $top10Projects,
+            ];
+        }
+
+        // If project selected but no dates set, return early
+        if (! $this->startDate || ! $this->endDate) {
+            return [
+                'projects' => $projects,
+                'kodams' => $kodams,
+                'korems' => $korems,
+                'kodims' => $kodims,
+                'koramils' => $koramils,
+                'locations' => $locations,
+                'stats' => $stats,
+                'taskProgress' => collect(),
+                'taskProgressByRoot' => [],
+                'hierarchicalProgress' => [],
+                'sCurveData' => $sCurveData,
                 'tasksWithoutProgress' => [],
                 'top10Projects' => $top10Projects,
             ];
@@ -736,9 +1019,6 @@ new class extends Component
 
         // Calculate hierarchical progress (month -> week -> day)
         $hierarchicalProgress = $this->calculateHierarchicalProgress();
-
-        // Calculate S-curve data
-        $sCurveData = $this->calculateSCurveData();
 
         // Get tasks without progress for selected project
         $tasksWithoutProgress = $this->getTasksWithoutProgress();
@@ -992,7 +1272,8 @@ new class extends Component
         </div>
 
         @if($stats)
-            <!-- Statistics Cards -->
+            <!-- All Statistics Cards (Always Visible) -->
+            <!-- Row 2: Resource Metrics -->
             <div class="grid gap-4 md:grid-cols-4">
                 <div class="rounded-xl border border-neutral-200 bg-white p-6 dark:border-neutral-700 dark:bg-neutral-900">
                     <div class="text-sm font-medium text-neutral-600 dark:text-neutral-400">Projects</div>
@@ -1026,92 +1307,62 @@ new class extends Component
                     <div class="mt-1 text-xs text-neutral-500">Users with reporter role</div>
                 </div>
             </div>
+
+            <!-- Row 1: Performance Metrics -->
+            <div class="grid gap-4 md:grid-cols-4">
+                <div class="rounded-xl border border-neutral-200 bg-white p-6 dark:border-neutral-700 dark:bg-neutral-900">
+                    <div class="text-sm font-medium text-neutral-600 dark:text-neutral-400">Overall Progress</div>
+                    <div class="mt-2 text-3xl font-bold text-blue-600 dark:text-blue-400">
+                        {{ number_format($this->getAggregatedOverallProgress(), 1) }}%
+                    </div>
+                    <div class="mt-1 text-xs text-neutral-500">Average across all projects</div>
+                </div>
+
+                <div class="rounded-xl border border-neutral-200 bg-white p-6 dark:border-neutral-700 dark:bg-neutral-900">
+                    <div class="text-sm font-medium text-neutral-600 dark:text-neutral-400">On Track</div>
+                    <div class="mt-2 text-3xl font-bold text-green-600 dark:text-green-400">
+                        {{ number_format($this->getProjectsOnTrackCount()) }}
+                    </div>
+                    <div class="mt-1 text-xs text-neutral-500">Projects meeting targets</div>
+                </div>
+
+                <div class="rounded-xl border border-neutral-200 bg-white p-6 dark:border-neutral-700 dark:bg-neutral-900">
+                    <div class="text-sm font-medium text-neutral-600 dark:text-neutral-400">Behind Schedule</div>
+                    <div class="mt-2 text-3xl font-bold text-red-600 dark:text-red-400">
+                        {{ number_format($this->getProjectsBehindCount()) }}
+                    </div>
+                    <div class="mt-1 text-xs text-neutral-500">Projects below targets</div>
+                </div>
+
+                <div class="rounded-xl border border-neutral-200 bg-white p-6 dark:border-neutral-700 dark:bg-neutral-900">
+                    <div class="text-sm font-medium text-neutral-600 dark:text-neutral-400">Avg Delay</div>
+                    <div class="mt-2 text-3xl font-bold text-amber-600 dark:text-amber-400">
+                        {{ number_format($this->getAverageDelayDays()) }}
+                    </div>
+                    <div class="mt-1 text-xs text-neutral-500">Days behind schedule</div>
+                </div>
+            </div>
+
+
         @endif
 
-        <!-- Top 10 Projects with Best Actual Progress -->
-        <div class="rounded-xl border border-neutral-200 bg-white dark:border-neutral-700 dark:bg-neutral-900">
-            <div class="border-b border-neutral-200 p-6 dark:border-neutral-700">
-                <flux:heading size="lg">Top 10 Projects with Best Actual Progress</flux:heading>
-                <p class="mt-1 text-sm text-neutral-600 dark:text-neutral-400">
-                    Ranked by weighted average progress of all tasks
-                </p>
-            </div>
-            <div class="p-6">
-                @if(empty($top10Projects))
-                    <div class="py-12 text-center text-neutral-600 dark:text-neutral-400">
-                        No projects with progress data available.
-                    </div>
-                @else
-                    <div class="space-y-4">
-                        @foreach($top10Projects as $index => $projectData)
-                            <div class="rounded-lg border border-neutral-200 bg-neutral-50 p-4 dark:border-neutral-700 dark:bg-neutral-800">
-                                <div class="flex items-start gap-4">
-                                    <!-- Rank Badge -->
-                                    <div class="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-full
-                                        @if($index === 0) bg-yellow-100 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300
-                                        @elseif($index === 1) bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300
-                                        @elseif($index === 2) bg-orange-100 text-orange-700 dark:bg-orange-900 dark:text-orange-300
-                                        @else bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300
-                                        @endif">
-                                        <span class="text-xl font-bold">{{ $index + 1 }}</span>
-                                    </div>
-
-                                    <!-- Project Info -->
-                                    <div class="flex-1">
-                                        <div class="mb-2">
-                                            <h4 class="font-semibold text-neutral-900 dark:text-neutral-100">
-                                                {{ $projectData['name'] }}
-                                            </h4>
-                                            <div class="mt-1 text-sm text-neutral-600 dark:text-neutral-400">
-                                                <span>{{ $projectData['location_village'] }}, {{ $projectData['location_district'] }}</span>
-                                                @if($projectData['office_name'])
-                                                    <span class="mx-1">•</span>
-                                                    <span>{{ $projectData['office_name'] }}</span>
-                                                @endif
-                                            </div>
-                                        </div>
-
-                                        <!-- Progress Bar -->
-                                        <div class="space-y-2">
-                                            <div class="flex items-center justify-between">
-                                                <span class="text-sm font-medium text-neutral-600 dark:text-neutral-400">
-                                                    Actual Progress
-                                                </span>
-                                                <span class="text-lg font-bold
-                                                    @if($projectData['progress'] >= 90) text-green-600 dark:text-green-400
-                                                    @elseif($projectData['progress'] >= 70) text-blue-600 dark:text-blue-400
-                                                    @elseif($projectData['progress'] >= 50) text-yellow-600 dark:text-yellow-400
-                                                    @else text-red-600 dark:text-red-400
-                                                    @endif">
-                                                    {{ number_format($projectData['progress'], 2) }}%
-                                                </span>
-                                            </div>
-                                            <div class="h-3 w-full overflow-hidden rounded-full bg-neutral-200 dark:bg-neutral-700">
-                                                <div
-                                                    class="h-full rounded-full transition-all
-                                                        @if($projectData['progress'] >= 90) bg-green-500
-                                                        @elseif($projectData['progress'] >= 70) bg-blue-500
-                                                        @elseif($projectData['progress'] >= 50) bg-yellow-500
-                                                        @else bg-red-500
-                                                        @endif"
-                                                    style="width: {{ min($projectData['progress'], 100) }}%"
-                                                ></div>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        @endforeach
-                    </div>
-                @endif
-            </div>
-        </div>
-
-        @if($selectedProjectId)
-            <!-- S-Curve Chart -->
-            @if(!empty($sCurveData['labels']))
+        <!-- S-Curve Chart -->
+        @if(!empty($sCurveData['labels']))
                 <div class="rounded-xl border border-neutral-200 bg-white p-6 dark:border-neutral-700 dark:bg-neutral-900" wire:key="scurve-{{ $selectedProjectId }}-{{ md5(json_encode($sCurveData)) }}">
-                    <flux:heading size="lg" class="mb-4">S-Curve Progress</flux:heading>
+                    <div class="mb-4 flex items-center justify-between">
+                        <flux:heading size="lg">
+                            @if($selectedProjectId)
+                                S-Curve Progress
+                            @else
+                                All Projects Summary - S-Curve Progress
+                            @endif
+                        </flux:heading>
+                        @if(!$selectedProjectId && isset($sCurveData['projectCount']))
+                            <flux:badge color="blue" size="sm">
+                                {{ $sCurveData['projectCount'] }} {{ Str::plural('project', $sCurveData['projectCount']) }}
+                            </flux:badge>
+                        @endif
+                    </div>
 
                     @if($sCurveData && isset($sCurveData['delayDays']) && $sCurveData['delayDays'] > 0)
                         <div class="mb-4 rounded-lg border border-amber-300 bg-amber-50 p-3 dark:border-amber-700 dark:bg-amber-900/20">
@@ -1246,8 +1497,210 @@ new class extends Component
                         ></canvas>
                     </div>
                 </div>
-            @endif
+        @endif
 
+        <!-- Progress Distribution Chart (Aggregated Mode Only) -->
+        @if(!$selectedProjectId)
+            @php
+                $distribution = $this->getProgressDistribution();
+            @endphp
+            @if(array_sum($distribution) > 0)
+                <div class="rounded-xl border border-neutral-200 bg-white p-6 dark:border-neutral-700 dark:bg-neutral-900">
+                    <flux:heading size="lg" class="mb-4">Project Completion Distribution</flux:heading>
+                    <p class="mb-4 text-sm text-neutral-600 dark:text-neutral-400">
+                        Projects grouped by completion percentage
+                    </p>
+
+                    <div class="relative h-64">
+                        <canvas
+                            x-data="{
+                                chart: null,
+                                distributionData: @js($distribution),
+                                init() {
+                                    this.waitForChartJs();
+                                },
+                                waitForChartJs() {
+                                    if (typeof Chart !== 'undefined') {
+                                        this.renderChart();
+                                    } else {
+                                        setTimeout(() => this.waitForChartJs(), 50);
+                                    }
+                                },
+                                renderChart() {
+                                    if (typeof Chart === 'undefined') return;
+
+                                    if (this.chart) {
+                                        this.chart.destroy();
+                                    }
+
+                                    const isDark = document.documentElement.classList.contains('dark');
+                                    const gridColor = isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)';
+                                    const textColor = isDark ? '#d1d5db' : '#374151';
+
+                                    this.chart = new Chart(this.$el, {
+                                        type: 'bar',
+                                        data: {
+                                            labels: ['0-25%', '25-50%', '50-75%', '75-100%'],
+                                            datasets: [{
+                                                label: 'Number of Projects',
+                                                data: [
+                                                    this.distributionData['0-25'],
+                                                    this.distributionData['25-50'],
+                                                    this.distributionData['50-75'],
+                                                    this.distributionData['75-100']
+                                                ],
+                                                backgroundColor: [
+                                                    'rgba(239, 68, 68, 0.8)',    // Red
+                                                    'rgba(251, 191, 36, 0.8)',   // Yellow
+                                                    'rgba(59, 130, 246, 0.8)',   // Blue
+                                                    'rgba(34, 197, 94, 0.8)'     // Green
+                                                ],
+                                                borderColor: [
+                                                    'rgb(239, 68, 68)',
+                                                    'rgb(251, 191, 36)',
+                                                    'rgb(59, 130, 246)',
+                                                    'rgb(34, 197, 94)'
+                                                ],
+                                                borderWidth: 2,
+                                                borderRadius: 6
+                                            }]
+                                        },
+                                        options: {
+                                            responsive: true,
+                                            maintainAspectRatio: false,
+                                            plugins: {
+                                                legend: {
+                                                    display: false
+                                                },
+                                                tooltip: {
+                                                    callbacks: {
+                                                        label: function(context) {
+                                                            return context.parsed.y + ' project' + (context.parsed.y !== 1 ? 's' : '');
+                                                        }
+                                                    }
+                                                }
+                                            },
+                                            scales: {
+                                                y: {
+                                                    beginAtZero: true,
+                                                    ticks: {
+                                                        stepSize: 1,
+                                                        color: textColor
+                                                    },
+                                                    grid: {
+                                                        color: gridColor
+                                                    },
+                                                    title: {
+                                                        display: true,
+                                                        text: 'Number of Projects',
+                                                        color: textColor
+                                                    }
+                                                },
+                                                x: {
+                                                    ticks: {
+                                                        color: textColor
+                                                    },
+                                                    grid: {
+                                                        display: false
+                                                    },
+                                                    title: {
+                                                        display: true,
+                                                        text: 'Completion Range',
+                                                        color: textColor
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    });
+                                }
+                            }"
+                            wire:ignore
+                        ></canvas>
+                    </div>
+                </div>
+            @endif
+        @endif
+
+        <!-- Top 10 Projects with Best Actual Progress -->
+        <div class="rounded-xl border border-neutral-200 bg-white dark:border-neutral-700 dark:bg-neutral-900">
+            <div class="border-b border-neutral-200 p-6 dark:border-neutral-700">
+                <flux:heading size="lg">Top 10 Projects with Best Actual Progress</flux:heading>
+                <p class="mt-1 text-sm text-neutral-600 dark:text-neutral-400">
+                    Ranked by weighted average progress of all tasks
+                </p>
+            </div>
+            <div class="p-6">
+                @if(empty($top10Projects))
+                    <div class="py-12 text-center text-neutral-600 dark:text-neutral-400">
+                        No projects with progress data available.
+                    </div>
+                @else
+                    <div class="space-y-4">
+                        @foreach($top10Projects as $index => $projectData)
+                            <div class="rounded-lg border border-neutral-200 bg-neutral-50 p-4 dark:border-neutral-700 dark:bg-neutral-800">
+                                <div class="flex items-start gap-4">
+                                    <!-- Rank Badge -->
+                                    <div class="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-full
+                                        @if($index === 0) bg-yellow-100 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300
+                                        @elseif($index === 1) bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300
+                                        @elseif($index === 2) bg-orange-100 text-orange-700 dark:bg-orange-900 dark:text-orange-300
+                                        @else bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300
+                                        @endif">
+                                        <span class="text-xl font-bold">{{ $index + 1 }}</span>
+                                    </div>
+
+                                    <!-- Project Info -->
+                                    <div class="flex-1">
+                                        <div class="mb-2">
+                                            <h4 class="font-semibold text-neutral-900 dark:text-neutral-100">
+                                                {{ $projectData['name'] }}
+                                            </h4>
+                                            <div class="mt-1 text-sm text-neutral-600 dark:text-neutral-400">
+                                                <span>{{ $projectData['location_village'] }}, {{ $projectData['location_district'] }}</span>
+                                                @if($projectData['office_name'])
+                                                    <span class="mx-1">•</span>
+                                                    <span>{{ $projectData['office_name'] }}</span>
+                                                @endif
+                                            </div>
+                                        </div>
+
+                                        <!-- Progress Bar -->
+                                        <div class="space-y-2">
+                                            <div class="flex items-center justify-between">
+                                                <span class="text-sm font-medium text-neutral-600 dark:text-neutral-400">
+                                                    Actual Progress
+                                                </span>
+                                                <span class="text-lg font-bold
+                                                    @if($projectData['progress'] >= 90) text-green-600 dark:text-green-400
+                                                    @elseif($projectData['progress'] >= 70) text-blue-600 dark:text-blue-400
+                                                    @elseif($projectData['progress'] >= 50) text-yellow-600 dark:text-yellow-400
+                                                    @else text-red-600 dark:text-red-400
+                                                    @endif">
+                                                    {{ number_format($projectData['progress'], 2) }}%
+                                                </span>
+                                            </div>
+                                            <div class="h-3 w-full overflow-hidden rounded-full bg-neutral-200 dark:bg-neutral-700">
+                                                <div
+                                                    class="h-full rounded-full transition-all
+                                                        @if($projectData['progress'] >= 90) bg-green-500
+                                                        @elseif($projectData['progress'] >= 70) bg-blue-500
+                                                        @elseif($projectData['progress'] >= 50) bg-yellow-500
+                                                        @else bg-red-500
+                                                        @endif"
+                                                    style="width: {{ min($projectData['progress'], 100) }}%"
+                                                ></div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        @endforeach
+                    </div>
+                @endif
+            </div>
+        </div>
+
+        @if($selectedProjectId)
             <!-- Hierarchical Progress Trend (Monthly -> Weekly -> Daily) -->
             @if(!empty($hierarchicalProgress))
                 <div class="rounded-xl border border-neutral-200 bg-white p-6 dark:border-neutral-700 dark:bg-neutral-900">

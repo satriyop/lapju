@@ -2,7 +2,7 @@
 <tr class="bg-neutral-100 dark:bg-neutral-800/70 cursor-pointer hover:bg-neutral-200 dark:hover:bg-neutral-800"
     @click="toggleOffice({{ $node['office']->id }})"
     wire:key="office-header-{{ $node['office']->id }}">
-    <td colspan="8" class="px-4 py-3">
+    <td colspan="7" class="px-4 py-3">
         <div class="flex items-center gap-3" style="padding-left: {{ $level * 2 }}rem;">
             {{-- Expand/Collapse Icon --}}
             <svg class="h-5 w-5 text-neutral-600 dark:text-neutral-400 transition-transform"
@@ -59,7 +59,14 @@
                     {{ $user->initials() }}
                 </div>
                 <div>
-                    <div class="font-medium text-neutral-900 dark:text-neutral-100">{{ $user->name }}</div>
+                    <div class="flex items-center gap-2">
+                        <span class="font-medium text-neutral-900 dark:text-neutral-100">{{ $user->name }}</span>
+                        @if($user->projects_count > 0)
+                            <flux:badge size="sm" class="bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300">
+                                {{ $user->projects_count }} {{ Str::plural('project', $user->projects_count) }}
+                            </flux:badge>
+                        @endif
+                    </div>
                     <div class="text-sm text-neutral-500 dark:text-neutral-400">{{ $user->phone }}</div>
                 </div>
             </div>
@@ -100,11 +107,20 @@
                 @endif
             </div>
         </td>
-        <td class="px-4 py-3 text-sm text-neutral-600 dark:text-neutral-400">
-            {{ $user->projects->count() }}
-        </td>
-        <td class="px-4 py-3 text-sm text-neutral-600 dark:text-neutral-400">
-            {{ $user->created_at->format('M j, Y') }}
+        <td class="px-4 py-3 text-sm">
+            <div class="flex flex-col gap-1.5">
+                <span class="text-neutral-900 dark:text-neutral-100 font-medium">
+                    {{ $user->projects->count() }} {{ Str::plural('project', $user->projects->count()) }}
+                </span>
+                <flux:button
+                    wire:click="openProjectModal({{ $user->id }})"
+                    size="sm"
+                    variant="ghost"
+                    class="w-fit"
+                >
+                    Assign
+                </flux:button>
+            </div>
         </td>
         <td class="px-4 py-3 text-right text-sm">
             <div class="flex items-center justify-end gap-2">
@@ -128,9 +144,6 @@
                 @else
                     <flux:button wire:click="editUser({{ $user->id }})" size="sm" variant="ghost">
                         Edit
-                    </flux:button>
-                    <flux:button wire:click="openProjectModal({{ $user->id }})" size="sm" variant="ghost">
-                        Projects
                     </flux:button>
                     @if($user->id !== Auth::id())
                         <flux:button
