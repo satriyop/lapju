@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 namespace Tests\Feature\Admin;
 
 use App\Models\Office;
@@ -24,6 +26,10 @@ class UserManagementTest extends TestCase
 
     private Office $koramil;
 
+    private Role $reporterRole;
+
+    private Role $managerRole;
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -42,6 +48,19 @@ class UserManagementTest extends TestCase
             'level_id' => $this->koramilLevel->id,
             'parent_id' => $this->kodim->id,
         ]);
+
+        // Create roles
+        $this->reporterRole = Role::factory()->system()->create([
+            'name' => 'Reporter',
+            'permissions' => ['view_projects'],
+            'office_level_id' => $this->koramilLevel->id,
+        ]);
+
+        $this->managerRole = Role::factory()->system()->create([
+            'name' => 'Manager',
+            'permissions' => ['view_projects', 'edit_projects'],
+            'office_level_id' => $this->kodimLevel->id,
+        ]);
     }
 
     public function test_admin_can_access_user_management_page(): void
@@ -51,17 +70,31 @@ class UserManagementTest extends TestCase
             ->assertStatus(200);
     }
 
-    public function test_admin_can_create_user_with_pre_approval(): void
+    public function test_non_admin_without_permission_cannot_access_user_management(): void
     {
-        Volt::actingAs($this->admin)
-            ->test('admin.users.index')
+        $regularUser = User::factory()->create([
+            'is_admin' => false,
+            'is_approved' => true,
+            'office_id' => $this->koramil->id,
+        ]);
+
+        $this->actingAs($regularUser)
+            ->get(route('admin.users.index'))
+            ->assertStatus(403);
+    }
+
+    public function test_admin_can_create_user_with_role(): void
+    {
+        $this->actingAs($this->admin);
+
+        Volt::test('admin.users.index')
             ->call('openCreateModal')
             ->assertSet('showCreateModal', true)
             ->set('createName', 'New User')
             ->set('createEmail', 'newuser@example.com')
             ->set('createNrp', 'NRP12345')
             ->set('createPhone', '08123456789')
-            ->set('createKodimId', $this->kodim->id)
+            ->set('createRoleId', $this->reporterRole->id)
             ->set('createOfficeId', $this->koramil->id)
             ->set('createPassword', 'password123')
             ->set('createPasswordConfirmation', 'password123')
@@ -81,19 +114,21 @@ class UserManagementTest extends TestCase
         $this->assertFalse($user->is_admin);
         $this->assertEquals($this->admin->id, $user->approved_by);
         $this->assertNotNull($user->approved_at);
+        $this->assertTrue($user->hasRole('Reporter'));
     }
 
     public function test_admin_can_create_user_with_admin_privileges(): void
     {
-        Volt::actingAs($this->admin)
-            ->test('admin.users.index')
+        $this->actingAs($this->admin);
+
+        Volt::test('admin.users.index')
             ->call('openCreateModal')
             ->set('createName', 'Admin User')
             ->set('createEmail', 'admin@example.com')
             ->set('createNrp', 'ADMIN123')
             ->set('createPhone', '08987654321')
-            ->set('createKodimId', $this->kodim->id)
-            ->set('createOfficeId', $this->koramil->id)
+            ->set('createRoleId', $this->managerRole->id)
+            ->set('createOfficeId', $this->kodim->id)
             ->set('createPassword', 'securepassword')
             ->set('createPasswordConfirmation', 'securepassword')
             ->set('createIsApproved', true)
@@ -107,14 +142,15 @@ class UserManagementTest extends TestCase
 
     public function test_admin_can_create_pending_user(): void
     {
-        Volt::actingAs($this->admin)
-            ->test('admin.users.index')
+        $this->actingAs($this->admin);
+
+        Volt::test('admin.users.index')
             ->call('openCreateModal')
             ->set('createName', 'Pending User')
             ->set('createEmail', 'pending@example.com')
             ->set('createNrp', 'PENDING123')
             ->set('createPhone', '08111222333')
-            ->set('createKodimId', $this->kodim->id)
+            ->set('createRoleId', $this->reporterRole->id)
             ->set('createOfficeId', $this->koramil->id)
             ->set('createPassword', 'password123')
             ->set('createPasswordConfirmation', 'password123')
@@ -126,32 +162,27 @@ class UserManagementTest extends TestCase
         $this->assertFalse($user->is_approved);
         $this->assertNull($user->approved_by);
         $this->assertNull($user->approved_at);
+        $this->assertFalse($user->hasRole('Reporter'));
     }
 
-    public function test_cascading_kodim_koramil_selection_in_create_modal(): void
+    public function test_cascading_role_office_selection(): void
     {
-        // Create another kodim and koramil
-        $kodim2 = Office::factory()->create(['level_id' => $this->kodimLevel->id]);
-        $koramil2 = Office::factory()->create([
-            'level_id' => $this->koramilLevel->id,
-            'parent_id' => $kodim2->id,
-        ]);
+        $this->actingAs($this->admin);
 
-        Volt::actingAs($this->admin)
-            ->test('admin.users.index')
+        Volt::test('admin.users.index')
             ->call('openCreateModal')
-            ->set('createKodimId', $this->kodim->id)
+            ->set('createRoleId', $this->reporterRole->id)
             ->set('createOfficeId', $this->koramil->id)
             ->assertSet('createOfficeId', $this->koramil->id)
-            // Change kodim should reset office
-            ->set('createKodimId', $kodim2->id)
+            ->set('createRoleId', $this->managerRole->id)
             ->assertSet('createOfficeId', null);
     }
 
     public function test_create_user_validates_required_fields(): void
     {
-        Volt::actingAs($this->admin)
-            ->test('admin.users.index')
+        $this->actingAs($this->admin);
+
+        Volt::test('admin.users.index')
             ->call('openCreateModal')
             ->set('createName', '')
             ->set('createEmail', '')
@@ -164,7 +195,7 @@ class UserManagementTest extends TestCase
                 'createEmail' => 'required',
                 'createNrp' => 'required',
                 'createPhone' => 'required',
-                'createKodimId' => 'required',
+                'createRoleId' => 'required',
                 'createOfficeId' => 'required',
                 'createPassword' => 'required',
             ]);
@@ -174,14 +205,15 @@ class UserManagementTest extends TestCase
     {
         User::factory()->create(['email' => 'taken@example.com']);
 
-        Volt::actingAs($this->admin)
-            ->test('admin.users.index')
+        $this->actingAs($this->admin);
+
+        Volt::test('admin.users.index')
             ->call('openCreateModal')
             ->set('createName', 'Test User')
             ->set('createEmail', 'taken@example.com')
             ->set('createNrp', 'NRP999')
             ->set('createPhone', '08123456789')
-            ->set('createKodimId', $this->kodim->id)
+            ->set('createRoleId', $this->reporterRole->id)
             ->set('createOfficeId', $this->koramil->id)
             ->set('createPassword', 'password123')
             ->set('createPasswordConfirmation', 'password123')
@@ -193,14 +225,15 @@ class UserManagementTest extends TestCase
     {
         User::factory()->create(['nrp' => 'TAKEN123']);
 
-        Volt::actingAs($this->admin)
-            ->test('admin.users.index')
+        $this->actingAs($this->admin);
+
+        Volt::test('admin.users.index')
             ->call('openCreateModal')
             ->set('createName', 'Test User')
             ->set('createEmail', 'unique@example.com')
             ->set('createNrp', 'TAKEN123')
             ->set('createPhone', '08123456789')
-            ->set('createKodimId', $this->kodim->id)
+            ->set('createRoleId', $this->reporterRole->id)
             ->set('createOfficeId', $this->koramil->id)
             ->set('createPassword', 'password123')
             ->set('createPasswordConfirmation', 'password123')
@@ -210,14 +243,15 @@ class UserManagementTest extends TestCase
 
     public function test_create_user_validates_password_confirmation(): void
     {
-        Volt::actingAs($this->admin)
-            ->test('admin.users.index')
+        $this->actingAs($this->admin);
+
+        Volt::test('admin.users.index')
             ->call('openCreateModal')
             ->set('createName', 'Test User')
             ->set('createEmail', 'test@example.com')
             ->set('createNrp', 'NRP888')
             ->set('createPhone', '08123456789')
-            ->set('createKodimId', $this->kodim->id)
+            ->set('createRoleId', $this->reporterRole->id)
             ->set('createOfficeId', $this->koramil->id)
             ->set('createPassword', 'password123')
             ->set('createPasswordConfirmation', 'differentpassword')
@@ -227,14 +261,15 @@ class UserManagementTest extends TestCase
 
     public function test_create_user_validates_phone_format(): void
     {
-        Volt::actingAs($this->admin)
-            ->test('admin.users.index')
+        $this->actingAs($this->admin);
+
+        Volt::test('admin.users.index')
             ->call('openCreateModal')
             ->set('createName', 'Test User')
             ->set('createEmail', 'test@example.com')
             ->set('createNrp', 'NRP777')
             ->set('createPhone', 'invalid-phone!')
-            ->set('createKodimId', $this->kodim->id)
+            ->set('createRoleId', $this->reporterRole->id)
             ->set('createOfficeId', $this->koramil->id)
             ->set('createPassword', 'password123')
             ->set('createPasswordConfirmation', 'password123')
@@ -242,25 +277,18 @@ class UserManagementTest extends TestCase
             ->assertHasErrors(['createPhone' => 'regex']);
     }
 
-    public function test_create_user_validates_office_belongs_to_kodim(): void
+    public function test_create_user_validates_office_matches_role_level(): void
     {
-        // Create another kodim and koramil
-        $kodim2 = Office::factory()->create(['level_id' => $this->kodimLevel->id]);
-        $koramil2 = Office::factory()->create([
-            'level_id' => $this->koramilLevel->id,
-            'parent_id' => $kodim2->id,
-        ]);
+        $this->actingAs($this->admin);
 
-        Volt::actingAs($this->admin)
-            ->test('admin.users.index')
+        Volt::test('admin.users.index')
             ->call('openCreateModal')
             ->set('createName', 'Test User')
             ->set('createEmail', 'test@example.com')
             ->set('createNrp', 'NRP666')
             ->set('createPhone', '08123456789')
-            ->set('createKodimId', $this->kodim->id)
-            // Try to assign koramil from different kodim
-            ->set('createOfficeId', $koramil2->id)
+            ->set('createRoleId', $this->reporterRole->id)
+            ->set('createOfficeId', $this->kodim->id)
             ->set('createPassword', 'password123')
             ->set('createPasswordConfirmation', 'password123')
             ->call('createUser')
@@ -269,8 +297,9 @@ class UserManagementTest extends TestCase
 
     public function test_open_create_modal_resets_form(): void
     {
-        Volt::actingAs($this->admin)
-            ->test('admin.users.index')
+        $this->actingAs($this->admin);
+
+        Volt::test('admin.users.index')
             ->set('createName', 'Old Name')
             ->set('createEmail', 'old@example.com')
             ->call('openCreateModal')
@@ -278,7 +307,7 @@ class UserManagementTest extends TestCase
             ->assertSet('createEmail', '')
             ->assertSet('createNrp', '')
             ->assertSet('createPhone', '')
-            ->assertSet('createKodimId', null)
+            ->assertSet('createRoleId', null)
             ->assertSet('createOfficeId', null)
             ->assertSet('createPassword', '')
             ->assertSet('createPasswordConfirmation', '')
@@ -288,14 +317,15 @@ class UserManagementTest extends TestCase
 
     public function test_created_user_password_is_hashed(): void
     {
-        Volt::actingAs($this->admin)
-            ->test('admin.users.index')
+        $this->actingAs($this->admin);
+
+        Volt::test('admin.users.index')
             ->call('openCreateModal')
             ->set('createName', 'Password Test')
             ->set('createEmail', 'passtest@example.com')
             ->set('createNrp', 'NRP555')
             ->set('createPhone', '08123456789')
-            ->set('createKodimId', $this->kodim->id)
+            ->set('createRoleId', $this->reporterRole->id)
             ->set('createOfficeId', $this->koramil->id)
             ->set('createPassword', 'password123')
             ->set('createPasswordConfirmation', 'password123')
@@ -307,16 +337,17 @@ class UserManagementTest extends TestCase
         $this->assertTrue(password_verify('password123', $user->password));
     }
 
-    public function test_approved_user_automatically_gets_reporter_role(): void
+    public function test_approved_user_gets_assigned_role(): void
     {
-        Volt::actingAs($this->admin)
-            ->test('admin.users.index')
+        $this->actingAs($this->admin);
+
+        Volt::test('admin.users.index')
             ->call('openCreateModal')
             ->set('createName', 'Reporter User')
             ->set('createEmail', 'reporter@example.com')
             ->set('createNrp', 'NRP444')
             ->set('createPhone', '08123456789')
-            ->set('createKodimId', $this->kodim->id)
+            ->set('createRoleId', $this->reporterRole->id)
             ->set('createOfficeId', $this->koramil->id)
             ->set('createPassword', 'password123')
             ->set('createPasswordConfirmation', 'password123')
@@ -326,22 +357,20 @@ class UserManagementTest extends TestCase
 
         $user = User::where('email', 'reporter@example.com')->first();
         $this->assertTrue($user->hasRole('Reporter'));
-
-        $reporterRole = Role::where('name', 'Reporter')->first();
-        $this->assertNotNull($reporterRole);
-        $this->assertTrue($user->roles->contains($reporterRole));
+        $this->assertTrue($user->roles->contains($this->reporterRole));
     }
 
-    public function test_pending_user_does_not_get_reporter_role(): void
+    public function test_pending_user_does_not_get_role_until_approved(): void
     {
-        Volt::actingAs($this->admin)
-            ->test('admin.users.index')
+        $this->actingAs($this->admin);
+
+        Volt::test('admin.users.index')
             ->call('openCreateModal')
             ->set('createName', 'Pending User')
             ->set('createEmail', 'pending2@example.com')
             ->set('createNrp', 'NRP333')
             ->set('createPhone', '08123456789')
-            ->set('createKodimId', $this->kodim->id)
+            ->set('createRoleId', $this->reporterRole->id)
             ->set('createOfficeId', $this->koramil->id)
             ->set('createPassword', 'password123')
             ->set('createPasswordConfirmation', 'password123')
@@ -354,9 +383,8 @@ class UserManagementTest extends TestCase
         $this->assertCount(0, $user->roles);
     }
 
-    public function test_approving_pending_user_assigns_reporter_role(): void
+    public function test_approving_koramil_user_assigns_reporter_role(): void
     {
-        // Create a pending user
         $pendingUser = User::factory()->create([
             'is_approved' => false,
             'office_id' => $this->koramil->id,
@@ -364,9 +392,9 @@ class UserManagementTest extends TestCase
 
         $this->assertFalse($pendingUser->hasRole('Reporter'));
 
-        // Approve the user
-        Volt::actingAs($this->admin)
-            ->test('admin.users.index')
+        $this->actingAs($this->admin);
+
+        Volt::test('admin.users.index')
             ->call('approveUser', $pendingUser->id);
 
         $pendingUser->refresh();
@@ -376,31 +404,47 @@ class UserManagementTest extends TestCase
         $this->assertEquals($this->admin->id, $pendingUser->approved_by);
     }
 
-    public function test_reporter_role_is_created_if_not_exists(): void
+    public function test_approving_kodim_user_assigns_manager_role(): void
     {
-        // Ensure Reporter role doesn't exist
-        Role::where('name', 'Reporter')->delete();
+        $pendingUser = User::factory()->create([
+            'is_approved' => false,
+            'office_id' => $this->kodim->id,
+        ]);
 
-        Volt::actingAs($this->admin)
-            ->test('admin.users.index')
+        $this->assertFalse($pendingUser->hasRole('Manager'));
+
+        $this->actingAs($this->admin);
+
+        Volt::test('admin.users.index')
+            ->call('approveUser', $pendingUser->id);
+
+        $pendingUser->refresh();
+        $this->assertTrue($pendingUser->is_approved);
+        $this->assertTrue($pendingUser->hasRole('Manager'));
+        $this->assertNotNull($pendingUser->approved_at);
+        $this->assertEquals($this->admin->id, $pendingUser->approved_by);
+    }
+
+    public function test_role_assignment_respects_office_level(): void
+    {
+        $this->actingAs($this->admin);
+
+        Volt::test('admin.users.index')
             ->call('openCreateModal')
-            ->set('createName', 'Role Test User')
-            ->set('createEmail', 'roletest@example.com')
+            ->set('createName', 'Manager User')
+            ->set('createEmail', 'manager@example.com')
             ->set('createNrp', 'NRP222')
             ->set('createPhone', '08123456789')
-            ->set('createKodimId', $this->kodim->id)
-            ->set('createOfficeId', $this->koramil->id)
+            ->set('createRoleId', $this->managerRole->id)
+            ->set('createOfficeId', $this->kodim->id)
             ->set('createPassword', 'password123')
             ->set('createPasswordConfirmation', 'password123')
             ->set('createIsApproved', true)
             ->call('createUser')
             ->assertHasNoErrors();
 
-        // Verify Reporter role was created
-        $reporterRole = Role::where('name', 'Reporter')->first();
-        $this->assertNotNull($reporterRole);
-
-        $user = User::where('email', 'roletest@example.com')->first();
-        $this->assertTrue($user->hasRole('Reporter'));
+        $user = User::where('email', 'manager@example.com')->first();
+        $this->assertTrue($user->hasRole('Manager'));
+        $this->assertEquals($this->kodim->id, $user->office_id);
     }
 }
