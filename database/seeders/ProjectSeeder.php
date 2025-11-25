@@ -79,6 +79,18 @@ class ProjectSeeder extends Seeder
             // Select a random location from the coverage area
             $location = $locations->random();
 
+            // Determine start date based on project index for backfill testing
+            // Project 1 (index 0): Nov 1 - Full showcase with 100% completion
+            // Projects 2-5 (index 1-4): Staggered starts for testing S-curve backfill
+            $startDate = match ($index) {
+                0 => Setting::get('project.default_start_date', '2025-11-01'), // Nov 1
+                1 => '2025-11-10', // Nov 10 - 16 day gap test
+                2 => '2025-11-15', // Nov 15 - 11 day gap test
+                3 => '2025-11-20', // Nov 20 - 6 day gap test
+                4 => '2025-11-25', // Nov 25 - 1 day gap test
+                default => Setting::get('project.default_start_date', '2025-11-01'),
+            };
+
             // Create project for this reporter
             $project = Project::create([
                 'name' => 'KOPERASI MERAH PUTIH '.$location->village_name,
@@ -86,7 +98,7 @@ class ProjectSeeder extends Seeder
                 'partner_id' => $partner->id,
                 'office_id' => $reporterOffice->id,
                 'location_id' => $location->id,
-                'start_date' => Setting::get('project.default_start_date', '2025-11-01'),
+                'start_date' => $startDate,
                 'end_date' => Setting::get('project.default_end_date', '2026-01-31'),
                 'status' => 'active',
             ]);
@@ -98,7 +110,7 @@ class ProjectSeeder extends Seeder
                 'updated_at' => now(),
             ]);
 
-            $this->command->info("Created project: {$project->name} for {$reporter->name} at {$reporterOffice->name}");
+            $this->command->info("Created project: {$project->name} (Start: {$startDate}) for {$reporter->name} at {$reporterOffice->name}");
         }
     }
 }

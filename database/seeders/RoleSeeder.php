@@ -35,10 +35,17 @@ class RoleSeeder extends Seeder
                 'is_system' => false,
             ],
             [
-                'name' => 'Manager',
+                'name' => 'Kodim Admin',
                 'description' => 'Can manage projects, tasks, approve users at Kodim level',
                 'office_level_id' => 3, // Kodim level
                 'permissions' => ['view_projects', 'edit_projects', 'view_tasks', 'edit_tasks', 'view_reports', 'manage_users'],
+                'is_system' => false,
+            ],
+            [
+                'name' => 'Koramil Admin',
+                'description' => 'Can approve users and manage projects at Koramil level',
+                'office_level_id' => 4, // Koramil level
+                'permissions' => ['view_projects', 'create_projects', 'edit_projects', 'delete_projects', 'update_progress', 'view_tasks', 'manage_users'],
                 'is_system' => false,
             ],
         ];

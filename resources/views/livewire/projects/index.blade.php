@@ -6,6 +6,7 @@ use App\Models\Partner;
 use App\Models\Project;
 use App\Models\Setting;
 use App\Models\TaskProgress;
+use Carbon\Carbon;
 use Livewire\Volt\Component;
 use Livewire\WithPagination;
 
@@ -47,6 +48,55 @@ new class extends Component
     }
 
     /**
+     * Check if current user can manage (edit/delete) a project.
+     */
+    public function canManageProject(Project $project): bool
+    {
+        $currentUser = auth()->user();
+
+        // Admins can manage all projects
+        if ($currentUser->isAdmin() || $currentUser->hasPermission('*')) {
+            return true;
+        }
+
+        // Check if user has edit permission
+        if (! $currentUser->hasPermission('edit_projects')) {
+            return false;
+        }
+
+        // Must have office assigned
+        if (! $currentUser->office_id || ! $project->office_id) {
+            return false;
+        }
+
+        $currentOffice = Office::with('level')->find($currentUser->office_id);
+
+        // Managers at Kodim level can manage projects in Koramils under their Kodim
+        if ($currentOffice && $currentOffice->level->level === 3) {
+            $projectOffice = Office::find($project->office_id);
+
+            return $projectOffice && $projectOffice->parent_id === $currentUser->office_id;
+        }
+
+        // Koramil Admins can manage projects in their office or created by users in their office
+        if ($currentOffice && $currentOffice->level->level === 4) {
+            // Check if project is in their office
+            if ($project->office_id === $currentUser->office_id) {
+                return true;
+            }
+
+            // Check if project was created by a user in their office
+            $hasUserInOffice = $project->users()
+                ->where('office_id', $currentUser->office_id)
+                ->exists();
+
+            return $hasUserInOffice;
+        }
+
+        return false;
+    }
+
+    /**
      * Calculate actual progress percentage for a project based on latest task progress entries.
      */
     private function calculateActualProgress(int $projectId): float
@@ -78,8 +128,8 @@ new class extends Component
         if ($currentUser->hasRole('Reporter')) {
             $projectsQuery->whereHas('users', fn ($q) => $q->where('users.id', $currentUser->id));
         }
-        // Managers at Kodim level can only see projects in Koramils under their Kodim
-        elseif ($currentUser->hasRole('Manager') && $currentUser->office_id) {
+        // Kodim Admins can only see projects in Koramils under their Kodim
+        elseif ($currentUser->hasRole('Kodim Admin') && $currentUser->office_id) {
             $userOffice = Office::with('level')->find($currentUser->office_id);
             if ($userOffice && $userOffice->level->level === 3) {
                 // Filter projects to only show those assigned to Koramils under this Kodim
@@ -87,6 +137,17 @@ new class extends Component
                     $q->where('parent_id', $currentUser->office_id);
                 });
             }
+        }
+        // Koramil Admins can see projects in their office or created by users in their office
+        elseif ($currentUser->hasRole('Koramil Admin') && $currentUser->office_id) {
+            $projectsQuery->where(function ($q) use ($currentUser) {
+                // Projects assigned to their office
+                $q->where('office_id', $currentUser->office_id)
+                    // OR projects created by users in their office
+                    ->orWhereHas('users', function ($userQuery) use ($currentUser) {
+                        $userQuery->where('office_id', $currentUser->office_id);
+                    });
+            });
         }
 
         $projects = $projectsQuery->orderBy('name')->paginate(20);
@@ -168,12 +229,12 @@ new class extends Component
 
     public function edit(int $id): void
     {
-        // Reporters cannot edit projects
-        if ($this->isReporter()) {
-            abort(403, 'Unauthorized action.');
-        }
-
         $project = Project::findOrFail($id);
+
+        // Check if current user can manage this project
+        if (! $this->canManageProject($project)) {
+            abort(403, 'You do not have permission to edit this project.');
+        }
         $this->editingId = $project->id;
         $this->name = $project->name;
         $this->description = $project->description ?? '';
@@ -232,19 +293,41 @@ new class extends Component
 
     public function save(): void
     {
-        // For reporters, ensure office values match their assigned office
-        if ($this->isReporter()) {
-            $user = auth()->user();
+        $user = auth()->user();
+
+        // For reporters and Koramil Admins, ensure office values match their assigned office
+        if ($this->isReporter() || $user->hasRole('Koramil Admin')) {
             $office = $user->office;
 
-            if ($office->level && $office->level->level == 4) {
+            if ($office && $office->level && $office->level->level == 4) {
                 // Koramil level - enforce their koramil
                 $this->koramilId = $office->id;
                 $this->kodimId = $office->parent_id;
-            } elseif ($office->level && $office->level->level == 3) {
+            } elseif ($office && $office->level && $office->level->level == 3) {
                 // Kodim level - enforce their kodim
                 $this->kodimId = $office->id;
             }
+        }
+
+        // Enforce date constraints for reporters
+        if ($this->isReporter()) {
+
+            // Enforce date constraints for reporters
+            $minStartDate = Setting::get('project.default_start_date', '2025-11-01');
+            $defaultEndDate = Setting::get('project.default_end_date', '2026-01-31');
+
+            // Validate start date is not before setting default
+            if ($this->startDate && $this->startDate < $minStartDate) {
+                $this->addError(
+                    'startDate',
+                    'Start date must be on or after '.Carbon::parse($minStartDate)->format('M d, Y').' (project setting).'
+                );
+
+                return;
+            }
+
+            // Force end date to setting default for reporters
+            $this->endDate = $defaultEndDate;
         }
 
         $validated = $this->validate([
@@ -253,7 +336,7 @@ new class extends Component
             'partnerId' => ['required', 'exists:partners,id'],
             'koramilId' => ['required', 'exists:offices,id'],
             'locationId' => ['required', 'exists:locations,id'],
-            'startDate' => ['nullable', 'date'],
+            'startDate' => $this->isReporter() ? ['required', 'date'] : ['nullable', 'date'],
             'endDate' => ['nullable', 'date', 'after_or_equal:startDate'],
             'status' => ['required', 'in:planning,active,completed,on_hold'],
         ]);
@@ -289,12 +372,14 @@ new class extends Component
 
     public function delete(int $id): void
     {
-        // Reporters cannot delete projects
-        if ($this->isReporter()) {
-            abort(403, 'Unauthorized action.');
+        $project = Project::findOrFail($id);
+
+        // Check if current user can manage this project
+        if (! $this->canManageProject($project)) {
+            abort(403, 'You do not have permission to delete this project.');
         }
 
-        Project::findOrFail($id)->delete();
+        $project->delete();
         $this->dispatch('project-deleted');
     }
 
@@ -369,7 +454,7 @@ new class extends Component
                         <td class="px-4 py-3 text-sm">{{ $project->start_date?->format('M d, Y') ?? '-' }}</td>
                         <td class="px-4 py-3 text-sm">{{ $project->end_date?->format('M d, Y') ?? '-' }}</td>
                         <td class="px-4 py-3 text-right text-sm">
-                            @if(!$this->isReporter())
+                            @if($this->canManageProject($project))
                                 <div class="flex items-center justify-end gap-2">
                                     <flux:button wire:click="edit({{ $project->id }})" size="sm" variant="ghost">
                                         Edit
@@ -384,7 +469,7 @@ new class extends Component
                                         Delete
                                     </flux:button>
                                 </div>
-                            @else
+                            @elseif($this->isReporter())
                                 <div class="flex items-center justify-end">
                                     <span class="inline-flex items-center rounded-full px-3 py-1 text-sm font-semibold
                                         @if($project->actual_progress >= 100) bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300
@@ -425,8 +510,8 @@ new class extends Component
                 @endforeach
             </flux:select>
 
-            @if($this->isReporter())
-                {{-- Read-only office fields for reporters --}}
+            @if($this->isReporter() || auth()->user()->hasRole('Koramil Admin'))
+                {{-- Read-only office fields for reporters and Koramil Admins --}}
                 <div class="grid grid-cols-2 gap-4">
                     <flux:input
                         label="Kodim"
@@ -445,7 +530,7 @@ new class extends Component
                     />
                 </div>
             @else
-                {{-- Editable office fields for non-reporters --}}
+                {{-- Editable office fields for Managers and Admins --}}
                 <div class="grid grid-cols-2 gap-4">
                     <flux:select wire:model.live="kodimId" label="Kodim" required>
                         <option value="">Select Kodim...</option>
@@ -472,7 +557,23 @@ new class extends Component
                 @endforeach
             </flux:select>
 
-            @if(!$this->isReporter())
+            @if($this->isReporter())
+                {{-- Reporter: Only start date visible, with constraints --}}
+                @php
+                    $minStartDate = Setting::get('project.default_start_date', '2025-11-01');
+                @endphp
+                <flux:input
+                    wire:model="startDate"
+                    label="Project Start Date"
+                    type="date"
+                    min="{{ $minStartDate }}"
+                    required
+                />
+                <p class="mt-1 text-xs text-neutral-600 dark:text-neutral-400">
+                    Minimum allowed date: {{ \Carbon\Carbon::parse($minStartDate)->format('M d, Y') }}
+                </p>
+            @else
+                {{-- Non-reporter: Both dates editable --}}
                 <div class="grid grid-cols-2 gap-4">
                     <flux:input
                         wire:model="startDate"

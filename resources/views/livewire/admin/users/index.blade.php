@@ -171,14 +171,31 @@ new class extends Component
             'approved_by' => Auth::id(),
         ]);
 
-        // Automatically assign Reporter role to newly approved users
-        $reporterRole = Role::firstOrCreate(['name' => 'Reporter']);
-        if (! $user->hasRole($reporterRole)) {
-            $user->roles()->attach($reporterRole->id, [
-                'assigned_by' => Auth::id(),
-                'created_at' => now(),
-                'updated_at' => now(),
-            ]);
+        // Automatically assign role based on user's office level
+        if ($user->office_id) {
+            $userOffice = Office::with('level')->find($user->office_id);
+
+            if ($userOffice && $userOffice->level) {
+                $roleToAssign = null;
+
+                // Assign role based on office level
+                if ($userOffice->level->level === 4) {
+                    // Koramil level → Reporter role
+                    $roleToAssign = Role::where('name', 'Reporter')->first();
+                } elseif ($userOffice->level->level === 3) {
+                    // Kodim level → Manager role
+                    $roleToAssign = Role::where('name', 'Manager')->first();
+                }
+
+                // Assign the role if found and not already assigned
+                if ($roleToAssign && ! $user->hasRole($roleToAssign)) {
+                    $user->roles()->attach($roleToAssign->id, [
+                        'assigned_by' => Auth::id(),
+                        'created_at' => now(),
+                        'updated_at' => now(),
+                    ]);
+                }
+            }
         }
     }
 
@@ -205,6 +222,11 @@ new class extends Component
         if ($currentOffice && $currentOffice->level->level === 3) {
             $targetOffice = Office::find($targetUser->office_id);
             return $targetOffice && $targetOffice->parent_id === $currentUser->office_id;
+        }
+
+        // If Koramil Admin at Koramil level, can only manage users in same Koramil
+        if ($currentOffice && $currentOffice->level->level === 4) {
+            return $targetUser->office_id === $currentUser->office_id;
         }
 
         return false;
@@ -311,6 +333,118 @@ new class extends Component
         }
     }
 
+    /**
+     * Build hierarchical office structure with users, hiding empty offices.
+     */
+    private function buildOfficeHierarchy($users): array
+    {
+        // Get all offices that have users
+        $officeIds = $users->pluck('office_id')->filter()->unique();
+
+        if ($officeIds->isEmpty()) {
+            return [];
+        }
+
+        // Get offices that have users
+        $userOffices = Office::with(['level', 'parent'])
+            ->whereIn('id', $officeIds->toArray())
+            ->get();
+
+        // Collect all office IDs we need (including ancestors)
+        $allOfficeIds = collect($officeIds);
+
+        // For each office with users, add its ancestors
+        foreach ($userOffices as $office) {
+            // Find ancestors using nested set: offices where _lft < current._lft AND _rgt > current._rgt
+            $ancestorIds = Office::where('_lft', '<', $office->_lft)
+                ->where('_rgt', '>', $office->_rgt)
+                ->pluck('id');
+
+            $allOfficeIds = $allOfficeIds->merge($ancestorIds);
+        }
+
+        // Get all offices (users' offices + their ancestors)
+        $offices = Office::with(['level', 'parent'])
+            ->whereIn('id', $allOfficeIds->unique()->toArray())
+            ->orderBy('_lft') // Use nested set ordering for hierarchy
+            ->get();
+
+        // Group users by office
+        $usersByOffice = $users->groupBy('office_id');
+
+        // Build hierarchy tree recursively
+        return $this->buildOfficeTree($offices, $usersByOffice, null);
+    }
+
+    /**
+     * Recursively build office tree structure.
+     */
+    private function buildOfficeTree($offices, $usersByOffice, $parentId, $level = 0): array
+    {
+        $tree = [];
+
+        foreach ($offices as $office) {
+            if ($office->parent_id == $parentId) {
+                $officeUsers = $usersByOffice->get($office->id, collect());
+                $children = $this->buildOfficeTree($offices, $usersByOffice, $office->id, $level + 1);
+
+                // Only include office if it has users OR has children with users
+                if ($officeUsers->isNotEmpty() || !empty($children)) {
+                    $tree[] = [
+                        'office' => $office,
+                        'users' => $officeUsers,
+                        'children' => $children,
+                        'level' => $level,
+                        'user_count' => $officeUsers->count() + collect($children)->sum(fn($child) => $child['user_count']),
+                        'pending_count' => $officeUsers->where('is_approved', false)->count() +
+                                         collect($children)->sum(fn($child) => $child['pending_count']),
+                    ];
+                }
+            }
+        }
+
+        return $tree;
+    }
+
+    /**
+     * Get list of office IDs that should be expanded by default.
+     */
+    private function getDefaultExpandedOffices(): array
+    {
+        $currentUser = Auth::user();
+        $expandedIds = [];
+
+        // Admin sees everything expanded
+        if ($currentUser->isAdmin()) {
+            return ['all']; // Special marker to expand all
+        }
+
+        // For Kodim Admin and Koramil Admin, expand their coverage area
+        if ($currentUser->office_id) {
+            $currentOffice = Office::with('level')->find($currentUser->office_id);
+
+            if ($currentOffice) {
+                // Expand current office
+                $expandedIds[] = $currentOffice->id;
+
+                // If Kodim level, also expand all child Koramils
+                if ($currentOffice->level && $currentOffice->level->level === 3) {
+                    $children = Office::where('parent_id', $currentOffice->id)->pluck('id')->toArray();
+                    $expandedIds = array_merge($expandedIds, $children);
+                }
+
+                // Expand all ancestors to show the path
+                $ancestors = Office::where('_lft', '<', $currentOffice->_lft)
+                    ->where('_rgt', '>', $currentOffice->_rgt)
+                    ->pluck('id')
+                    ->toArray();
+                $expandedIds = array_merge($expandedIds, $ancestors);
+            }
+        }
+
+        return $expandedIds;
+    }
+
     public function with(): array
     {
         $currentUser = Auth::user();
@@ -326,6 +460,7 @@ new class extends Component
             ->with('approvedBy', 'projects', 'office.parent', 'office.level', 'roles');
 
         // Managers can only see users under their Kodim coverage
+        // Koramil Admins can only see users in their exact office
         if (!$isAdmin && $currentUser->office_id) {
             $currentOffice = Office::with('level')->find($currentUser->office_id);
 
@@ -334,6 +469,10 @@ new class extends Component
                 $query->whereHas('office', function ($q) use ($currentUser) {
                     $q->where('parent_id', $currentUser->office_id);
                 });
+            }
+            // If user is at Koramil level (Koramil Admin), filter users to only show same office
+            elseif ($currentOffice && $currentOffice->level->level === 4) {
+                $query->where('office_id', $currentUser->office_id);
             }
         }
 
@@ -347,6 +486,9 @@ new class extends Component
                 $pendingCountQuery->whereHas('office', function ($q) use ($currentUser) {
                     $q->where('parent_id', $currentUser->office_id);
                 });
+            }
+            elseif ($currentOffice && $currentOffice->level->level === 4) {
+                $pendingCountQuery->where('office_id', $currentUser->office_id);
             }
         }
         $pendingCount = $pendingCountQuery->count();
@@ -370,11 +512,16 @@ new class extends Component
                 $officesQuery = Office::where('level_id', $selectedRole->office_level_id);
 
                 // Managers can only assign users to Koramils under their Kodim
+                // Koramil Admins can only assign users to their own Koramil
                 if (!$isAdmin && $currentUser->office_id) {
                     $currentOffice = Office::with('level')->find($currentUser->office_id);
                     if ($currentOffice && $currentOffice->level->level === 3) {
                         // If Manager, only show Koramils under their Kodim
                         $officesQuery->where('parent_id', $currentUser->office_id);
+                    }
+                    elseif ($currentOffice && $currentOffice->level->level === 4) {
+                        // If Koramil Admin, only show their own office
+                        $officesQuery->where('id', $currentUser->office_id);
                     }
                 }
 
@@ -384,10 +531,14 @@ new class extends Component
                 $officesQuery = Office::with('level')->orderBy('level_id')->orderBy('name');
 
                 // Managers can only assign to offices under their coverage
+                // Koramil Admins can only assign to their own office
                 if (!$isAdmin && $currentUser->office_id) {
                     $currentOffice = Office::with('level')->find($currentUser->office_id);
                     if ($currentOffice && $currentOffice->level->level === 3) {
                         $officesQuery->where('parent_id', $currentUser->office_id);
+                    }
+                    elseif ($currentOffice && $currentOffice->level->level === 4) {
+                        $officesQuery->where('id', $currentUser->office_id);
                     }
                 }
 
@@ -395,8 +546,12 @@ new class extends Component
             }
         }
 
+        $users = $query->get();
+
         return [
-            'users' => $query->get(),
+            'users' => $users,
+            'officeHierarchy' => $this->buildOfficeHierarchy($users),
+            'expandedOffices' => $this->getDefaultExpandedOffices(),
             'pendingCount' => $pendingCount,
             'projects' => $projects,
             'offices' => $offices,
@@ -406,7 +561,42 @@ new class extends Component
     }
 }; ?>
 
-<div class="flex h-full w-full flex-1 flex-col gap-6">
+<div class="flex h-full w-full flex-1 flex-col gap-6"
+     x-data="{
+         expandedOffices: @js($expandedOffices),
+         isExpanded(officeId) {
+             return this.expandedOffices.includes('all') || this.expandedOffices.includes(officeId);
+         },
+         toggleOffice(officeId) {
+             // If 'all' is present, we need to expand everything except the clicked one
+             if (this.expandedOffices.includes('all')) {
+                 // Get all office IDs from the hierarchy
+                 const allIds = this.getAllOfficeIds();
+                 // Remove 'all' and set to all IDs except the one being collapsed
+                 this.expandedOffices = allIds.filter(id => id !== officeId);
+             } else if (this.expandedOffices.includes(officeId)) {
+                 // Normal collapse: remove from array
+                 this.expandedOffices = this.expandedOffices.filter(id => id !== officeId);
+             } else {
+                 // Normal expand: add to array
+                 this.expandedOffices.push(officeId);
+             }
+         },
+         getAllOfficeIds() {
+             // Recursively get all office IDs from hierarchy
+             const ids = [];
+             const traverse = (nodes) => {
+                 nodes.forEach(node => {
+                     ids.push(node.office.id);
+                     if (node.children && node.children.length > 0) {
+                         traverse(node.children);
+                     }
+                 });
+             };
+             traverse(@js($officeHierarchy));
+             return ids;
+         }
+     }">
     <div class="flex items-center justify-between">
         <div>
             <flux:heading size="xl">User Management</flux:heading>
@@ -460,102 +650,8 @@ new class extends Component
                 </tr>
             </thead>
             <tbody class="divide-y divide-neutral-200 dark:divide-neutral-700">
-                @forelse($users as $user)
-                    <tr wire:key="user-{{ $user->id }}" class="hover:bg-neutral-50 dark:hover:bg-neutral-800/50">
-                        <td class="px-4 py-3">
-                            <div class="flex items-center gap-3">
-                                <div class="flex h-10 w-10 items-center justify-center rounded-full bg-blue-100 text-sm font-semibold text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
-                                    {{ $user->initials() }}
-                                </div>
-                                <div>
-                                    <div class="font-medium text-neutral-900 dark:text-neutral-100">{{ $user->name }}</div>
-                                    <div class="text-sm text-neutral-500 dark:text-neutral-400">{{ $user->phone }}</div>
-                                </div>
-                            </div>
-                        </td>
-                        <td class="px-4 py-3 text-sm text-neutral-600 dark:text-neutral-400">
-                            {{ $user->nrp ?? '-' }}
-                        </td>
-                        <td class="px-4 py-3 text-sm">
-                            @if($user->roles->count() > 0)
-                                <div class="flex flex-wrap gap-1">
-                                    @foreach($user->roles as $role)
-                                        <flux:badge size="sm">{{ $role->name }}</flux:badge>
-                                    @endforeach
-                                </div>
-                            @else
-                                <span class="text-neutral-400">No role</span>
-                            @endif
-                        </td>
-                        <td class="px-4 py-3 text-sm">
-                            @if($user->office)
-                                <div class="text-neutral-900 dark:text-neutral-100">{{ $user->office->name }}</div>
-                                @if($user->office->parent)
-                                    <div class="text-xs text-neutral-500 dark:text-neutral-400">{{ $user->office->parent->name }}</div>
-                                @endif
-                            @else
-                                <span class="text-neutral-400">-</span>
-                            @endif
-                        </td>
-                        <td class="px-4 py-3 text-sm">
-                            <div class="flex flex-col gap-1">
-                                @if($user->is_admin)
-                                    <flux:badge color="purple" size="sm">Admin</flux:badge>
-                                @endif
-                                @if($user->is_approved)
-                                    <flux:badge color="green" size="sm">Approved</flux:badge>
-                                @else
-                                    <flux:badge color="amber" size="sm">Pending</flux:badge>
-                                @endif
-                            </div>
-                        </td>
-                        <td class="px-4 py-3 text-sm text-neutral-600 dark:text-neutral-400">
-                            {{ $user->projects->count() }}
-                        </td>
-                        <td class="px-4 py-3 text-sm text-neutral-600 dark:text-neutral-400">
-                            {{ $user->created_at->format('M j, Y') }}
-                        </td>
-                        <td class="px-4 py-3 text-right text-sm">
-                            <div class="flex items-center justify-end gap-2">
-                                @if(!$user->is_approved)
-                                    <flux:button
-                                        wire:click="approveUser({{ $user->id }})"
-                                        wire:confirm="Approve this user?"
-                                        size="sm"
-                                        variant="primary"
-                                    >
-                                        Approve
-                                    </flux:button>
-                                    <flux:button
-                                        wire:click="rejectUser({{ $user->id }})"
-                                        wire:confirm="Reject and delete this user?"
-                                        size="sm"
-                                        variant="danger"
-                                    >
-                                        Reject
-                                    </flux:button>
-                                @else
-                                    <flux:button wire:click="editUser({{ $user->id }})" size="sm" variant="ghost">
-                                        Edit
-                                    </flux:button>
-                                    <flux:button wire:click="openProjectModal({{ $user->id }})" size="sm" variant="ghost">
-                                        Projects
-                                    </flux:button>
-                                    @if($user->id !== Auth::id())
-                                        <flux:button
-                                            wire:click="deleteUser({{ $user->id }})"
-                                            wire:confirm="Delete this user?"
-                                            size="sm"
-                                            variant="ghost"
-                                            class="text-red-600 hover:text-red-700"
-                                        >
-                                            Delete
-                                        </flux:button>
-                                    @endif
-                                @endif
-                            </div>
-                        </td>
-                    </tr>
+                @forelse($officeHierarchy as $officeNode)
+                    @include('livewire.admin.users.partials.office-node', ['node' => $officeNode, 'level' => 0])
                 @empty
                     <tr>
                         <td colspan="8" class="px-4 py-8 text-center text-sm text-neutral-500">

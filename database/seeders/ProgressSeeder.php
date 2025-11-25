@@ -73,6 +73,13 @@ class ProgressSeeder extends Seeder
      */
     private function seedProjectProgress(Project $project, User $user, float $completionTarget, int $projectNumber): void
     {
+        // Skip progress generation for Projects 2-5 (backfill test scenarios)
+        if ($projectNumber >= 2 && $projectNumber <= 5) {
+            $this->command->info("Skipping progress for Project {$projectNumber} (S-curve backfill test scenario - no initial progress)");
+
+            return;
+        }
+
         // Get all leaf tasks for this project
         $leafTasks = Task::where('project_id', $project->id)
             ->whereDoesntHave('children')
