@@ -51,14 +51,18 @@ new class extends Component
         if ($currentUser->hasRole('Reporter')) {
             $projectQuery->whereHas('users', fn ($q) => $q->where('users.id', $currentUser->id));
         }
-        // Managers at Kodim level can only see projects in Koramils under their Kodim
-        elseif ($currentUser->hasRole('Manager') && $currentUser->office_id) {
+        // Kodim Admins can only see projects in Koramils under their Kodim
+        elseif ($currentUser->hasRole('Kodim Admin') && $currentUser->office_id) {
             $userOffice = Office::with('level')->find($currentUser->office_id);
             if ($userOffice && $userOffice->level->level === 3) {
                 $projectQuery->whereHas('office', function ($q) use ($currentUser) {
                     $q->where('parent_id', $currentUser->office_id);
                 });
             }
+        }
+        // Koramil Admins can only see projects in their own Koramil
+        elseif ($currentUser->hasRole('Koramil Admin') && $currentUser->office_id) {
+            $projectQuery->where('office_id', $currentUser->office_id);
         }
 
         $firstProject = $projectQuery->first();
@@ -271,8 +275,54 @@ new class extends Component
             return;
         }
 
-        // Get project to validate date range
-        $project = Project::find($this->selectedProjectId);
+        // Get project to validate date range and authorization
+        $project = Project::with('office')->find($this->selectedProjectId);
+
+        if (! $project) {
+            $this->addError('project', 'Project not found.');
+            return;
+        }
+
+        // AUTHORIZATION: Verify user has access to this project
+        $currentUser = auth()->user();
+
+        // Admins have full access
+        if (! $currentUser->isAdmin()) {
+            // Reporters can only save progress for projects they're assigned to
+            if ($currentUser->hasRole('Reporter')) {
+                if (! $project->users()->where('users.id', $currentUser->id)->exists()) {
+                    $this->addError('project', 'You are not assigned to this project.');
+                    return;
+                }
+            }
+            // Kodim Admins can only save for projects in Koramils under their Kodim
+            elseif ($currentUser->hasRole('Kodim Admin') && $currentUser->office_id) {
+                $userOffice = Office::with('level')->find($currentUser->office_id);
+
+                if (! $userOffice || $userOffice->level->level !== 3) {
+                    $this->addError('project', 'Invalid office assignment.');
+                    return;
+                }
+
+                // Check if project's office is a child of the Kodim Admin's office
+                if (! $project->office || $project->office->parent_id !== $currentUser->office_id) {
+                    $this->addError('project', 'You do not have access to this project.');
+                    return;
+                }
+            }
+            // Koramil Admins can only save for projects in their own Koramil
+            elseif ($currentUser->hasRole('Koramil Admin') && $currentUser->office_id) {
+                if (! $project->office || $project->office_id !== $currentUser->office_id) {
+                    $this->addError('project', 'You do not have access to this project.');
+                    return;
+                }
+            }
+            // Other roles: deny access unless explicitly handled
+            else {
+                $this->addError('project', 'You do not have permission to update progress.');
+                return;
+            }
+        }
 
         // Validate date is not in the future
         if ($this->selectedDate > $this->maxDate) {
@@ -357,8 +407,54 @@ new class extends Component
             return;
         }
 
-        // Get project to validate date range
-        $project = Project::find($this->selectedProjectId);
+        // Get project to validate date range and authorization
+        $project = Project::with('office')->find($this->selectedProjectId);
+
+        if (! $project) {
+            $this->addError("photos.{$rootTaskId}", 'Project not found.');
+            return;
+        }
+
+        // AUTHORIZATION: Verify user has access to this project
+        $currentUser = auth()->user();
+
+        // Admins have full access
+        if (! $currentUser->isAdmin()) {
+            // Reporters can only upload photos for projects they're assigned to
+            if ($currentUser->hasRole('Reporter')) {
+                if (! $project->users()->where('users.id', $currentUser->id)->exists()) {
+                    $this->addError("photos.{$rootTaskId}", 'You are not assigned to this project.');
+                    return;
+                }
+            }
+            // Kodim Admins can only upload for projects in Koramils under their Kodim
+            elseif ($currentUser->hasRole('Kodim Admin') && $currentUser->office_id) {
+                $userOffice = Office::with('level')->find($currentUser->office_id);
+
+                if (! $userOffice || $userOffice->level->level !== 3) {
+                    $this->addError("photos.{$rootTaskId}", 'Invalid office assignment.');
+                    return;
+                }
+
+                // Check if project's office is a child of the Kodim Admin's office
+                if (! $project->office || $project->office->parent_id !== $currentUser->office_id) {
+                    $this->addError("photos.{$rootTaskId}", 'You do not have access to this project.');
+                    return;
+                }
+            }
+            // Koramil Admins can only upload for projects in their own Koramil
+            elseif ($currentUser->hasRole('Koramil Admin') && $currentUser->office_id) {
+                if (! $project->office || $project->office_id !== $currentUser->office_id) {
+                    $this->addError("photos.{$rootTaskId}", 'You do not have access to this project.');
+                    return;
+                }
+            }
+            // Other roles: deny access unless explicitly handled
+            else {
+                $this->addError("photos.{$rootTaskId}", 'You do not have permission to upload photos.');
+                return;
+            }
+        }
 
         // Validate date is within project date range (if project dates are set)
         if ($project && $project->start_date && $project->end_date) {

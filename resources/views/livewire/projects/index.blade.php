@@ -7,6 +7,7 @@ use App\Models\Project;
 use App\Models\Setting;
 use App\Models\TaskProgress;
 use Carbon\Carbon;
+use Illuminate\Support\Collection;
 use Livewire\Volt\Component;
 use Livewire\WithPagination;
 
@@ -41,6 +42,18 @@ new class extends Component
     public string $status = 'planning';
 
     public bool $showModal = false;
+
+    public bool $isEditing = false;
+
+    public Collection $availableKoramils;
+
+    public Collection $availableLocations;
+
+    public function mount(): void
+    {
+        $this->availableKoramils = collect();
+        $this->availableLocations = collect();
+    }
 
     public function isReporter(): bool
     {
@@ -198,6 +211,8 @@ new class extends Component
     public function create(): void
     {
         $this->reset(['editingId', 'name', 'description', 'partnerId', 'kodimId', 'koramilId', 'locationId', 'startDate', 'endDate', 'status']);
+        $this->availableKoramils = collect();
+        $this->availableLocations = collect();
         $this->status = 'planning';
         $this->startDate = Setting::get('project.default_start_date', '2025-11-01');
         $this->endDate = Setting::get('project.default_end_date', '2026-01-31');
@@ -229,7 +244,9 @@ new class extends Component
 
     public function edit(int $id): void
     {
-        $project = Project::findOrFail($id);
+        $this->isEditing = true;
+
+        $project = Project::with(['office.parent', 'location'])->findOrFail($id);
 
         // Check if current user can manage this project
         if (! $this->canManageProject($project)) {
@@ -249,11 +266,34 @@ new class extends Component
             // Set Kodim FIRST (parent)
             if ($project->office->parent_id) {
                 $this->kodimId = $project->office->parent_id;
+
+                // Explicitly load filtered Koramils for this Kodim
+                $this->availableKoramils = Office::whereHas('level', fn ($q) => $q->where('level', 4))
+                    ->where('parent_id', $this->kodimId)
+                    ->orderBy('name')
+                    ->get();
             }
+
             // Then set Koramil (child)
             $this->koramilId = $project->office_id;
+
+            // Explicitly load filtered Locations for this Koramil
+            $koramil = Office::find($this->koramilId);
+            if ($koramil) {
+                $locationsQuery = Location::query();
+                if ($koramil->coverage_district) {
+                    $locationsQuery->where('district_name', $koramil->coverage_district);
+                } elseif ($koramil->coverage_city) {
+                    $locationsQuery->where('city_name', $koramil->coverage_city);
+                }
+                $this->availableLocations = $locationsQuery
+                    ->orderBy('city_name')
+                    ->orderBy('village_name')
+                    ->get();
+            }
         }
 
+        $this->isEditing = false;
         $this->showModal = true;
     }
 
@@ -261,6 +301,11 @@ new class extends Component
     {
         // Reporters cannot change office hierarchy
         if ($this->isReporter()) {
+            return;
+        }
+
+        // Don't reset fields during edit initialization
+        if ($this->isEditing) {
             return;
         }
 
@@ -273,6 +318,11 @@ new class extends Component
     {
         // Reporters cannot change office hierarchy
         if ($this->isReporter()) {
+            return;
+        }
+
+        // Don't reset fields during edit initialization
+        if ($this->isEditing) {
             return;
         }
 
@@ -385,7 +435,9 @@ new class extends Component
 
     public function cancelEdit(): void
     {
-        $this->reset(['showModal', 'editingId', 'name', 'description', 'partnerId', 'kodimId', 'koramilId', 'locationId', 'startDate', 'endDate', 'status']);
+        $this->reset(['showModal', 'editingId', 'name', 'description', 'partnerId', 'kodimId', 'koramilId', 'locationId', 'startDate', 'endDate', 'status', 'isEditing']);
+        $this->availableKoramils = collect();
+        $this->availableLocations = collect();
     }
 
     public function updatedSearch(): void
@@ -562,18 +614,26 @@ new class extends Component
                         @endforeach
                     </flux:select>
 
-                    <flux:select wire:model.live="koramilId" label="Koramil" required>
+                    <flux:select
+                        wire:model.live="koramilId"
+                        wire:key="koramil-select-{{ $editingId ?? 'new' }}"
+                        label="Koramil"
+                        required>
                         <option value="">Select Koramil...</option>
-                        @foreach($koramils as $koramil)
+                        @foreach(($editingId && $availableKoramils->isNotEmpty()) ? $availableKoramils : $koramils as $koramil)
                             <option value="{{ $koramil->id }}">{{ $koramil->name }}</option>
                         @endforeach
                     </flux:select>
                 </div>
             @endif
 
-            <flux:select wire:model.live="locationId" label="Location" required>
+            <flux:select
+                wire:model.live="locationId"
+                wire:key="location-select-{{ $editingId ?? 'new' }}"
+                label="Location"
+                required>
                 <option value="">Select location...</option>
-                @foreach($locations as $location)
+                @foreach(($editingId && $availableLocations->isNotEmpty()) ? $availableLocations : $locations as $location)
                     <option value="{{ $location->id }}">
                         {{ $location->village_name }} - {{ $location->district_name }}
                     </option>
