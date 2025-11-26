@@ -1,5 +1,5 @@
 {{-- Office Header Row --}}
-<tr class="bg-neutral-100 dark:bg-neutral-800/70 cursor-pointer hover:bg-neutral-200 dark:hover:bg-neutral-800"
+<tr class="bg-neutral-100 dark:bg-neutral-800/70 cursor-pointer"
     @click="toggleOffice({{ $node['office']->id }})"
     wire:key="office-header-{{ $node['office']->id }}">
     <td colspan="7" class="px-4 py-3">

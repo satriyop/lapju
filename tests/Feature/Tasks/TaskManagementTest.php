@@ -203,7 +203,9 @@ class TaskManagementTest extends TestCase
         ]);
 
         $this->assertTrue($leafTask->progress()->exists());
-        $retrievedProgress = TaskProgress::where('task_id', $leafTask->id)->first();
+        $retrievedProgress = TaskProgress::where('task_id', $leafTask->id)
+            ->orderBy('progress_date', 'desc')
+            ->first();
         $this->assertEquals(75.00, $retrievedProgress->percentage);
     }
 

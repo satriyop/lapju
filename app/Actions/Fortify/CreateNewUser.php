@@ -43,7 +43,7 @@ class CreateNewUser implements CreatesNewUsers
                 Rule::unique(User::class),
             ],
             'office_id' => [
-                'required',
+                'nullable',
                 'integer',
                 Rule::exists(Office::class, 'id'),
             ],

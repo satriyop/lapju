@@ -36,19 +36,21 @@ new class extends Component
             'nrp' => ['required', 'string', 'max:50', 'unique:users,nrp'],
             'phone' => ['required', 'string', 'min:10', 'max:13', 'regex:/^08[0-9]{8,11}$/', 'unique:users,phone'],
             'kodimId' => ['required', 'integer', 'exists:offices,id'],
-            'officeId' => ['required', 'integer', 'exists:offices,id'],
+            'officeId' => ['nullable', 'integer', 'exists:offices,id'],
             'password' => ['required', 'string', 'min:8', 'confirmed'],
         ], [
             'phone.regex' => 'Phone number must start with 08 and contain 10-13 digits.',
             'phone.unique' => 'This phone number is already registered.',
         ]);
 
-        // Verify the selected office belongs to the selected kodim
-        $office = Office::find($this->officeId);
-        if (! $office || $office->parent_id !== $this->kodimId) {
-            $this->addError('officeId', 'Invalid office selection.');
+        // Verify the selected office belongs to the selected kodim (only if Koramil is selected)
+        if ($this->officeId) {
+            $office = Office::find($this->officeId);
+            if (! $office || $office->parent_id !== $this->kodimId) {
+                $this->addError('officeId', 'Invalid office selection.');
 
-            return;
+                return;
+            }
         }
 
         // Create user via Fortify action
@@ -57,7 +59,7 @@ new class extends Component
             'email' => $this->email,
             'nrp' => $this->nrp,
             'phone' => $this->phone,
-            'office_id' => $this->officeId,
+            'office_id' => $this->officeId ?: $this->kodimId, // Use Koramil if selected, otherwise use Kodim
             'password' => $this->password,
             'password_confirmation' => $this->password_confirmation,
         ]);
@@ -167,12 +169,11 @@ new class extends Component
             <!-- Koramil Selection (depends on Kodim) -->
             <flux:select
                 wire:model="officeId"
-                :label="__('Koramil (Office)')"
-                required
+                :label="__('Koramil (Office - Optional)')"
                 :disabled="!$kodimId"
             >
                 <flux:select.option value="">
-                    {{ $kodimId ? __('Select your Koramil') : __('Select Kodim first') }}
+                    {{ $kodimId ? __('None - I work at Kodim level') : __('Select Kodim first') }}
                 </flux:select.option>
                 @foreach ($koramils as $koramil)
                     <flux:select.option value="{{ $koramil->id }}">
@@ -180,6 +181,9 @@ new class extends Component
                     </flux:select.option>
                 @endforeach
             </flux:select>
+            <div class="-mt-4 text-sm text-zinc-500 dark:text-zinc-400">
+                {{ __('Leave empty if you work at Kodim level, or select your specific Koramil') }}
+            </div>
             @error('officeId')
                 <div class="-mt-4 text-sm text-red-600">{{ $message }}</div>
             @enderror

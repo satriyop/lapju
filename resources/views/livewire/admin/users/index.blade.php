@@ -30,6 +30,8 @@ new class extends Component
 
     public bool $editIsAdmin = false;
 
+    public array $editRoleIds = [];
+
     public bool $showEditModal = false;
 
     public bool $showProjectModal = false;
@@ -183,8 +185,8 @@ new class extends Component
                     // Koramil level → Reporter role
                     $roleToAssign = Role::where('name', 'Reporter')->first();
                 } elseif ($userOffice->level->level === 3) {
-                    // Kodim level → Manager role
-                    $roleToAssign = Role::where('name', 'Manager')->first();
+                    // Kodim level → Kodim Admin role
+                    $roleToAssign = Role::where('name', 'Kodim Admin')->first();
                 }
 
                 // Assign the role if found and not already assigned
@@ -259,7 +261,7 @@ new class extends Component
 
     public function editUser(int $userId): void
     {
-        $user = User::findOrFail($userId);
+        $user = User::with('roles')->findOrFail($userId);
 
         // Check if current user can manage this user
         if (!$this->canManageUser($user)) {
@@ -272,6 +274,7 @@ new class extends Component
         $this->editNrp = $user->nrp ?? '';
         $this->editOfficeId = $user->office_id;
         $this->editIsAdmin = $user->is_admin;
+        $this->editRoleIds = $user->roles->pluck('id')->toArray();
         $this->showEditModal = true;
     }
 
@@ -282,13 +285,41 @@ new class extends Component
             'editPhone' => 'required|string|min:10|max:13|regex:/^08[0-9]{8,11}$/|unique:users,phone,'.$this->editingUserId,
             'editNrp' => 'nullable|string|max:50|unique:users,nrp,'.$this->editingUserId,
             'editOfficeId' => 'nullable|integer|exists:offices,id',
+            'editRoleIds' => 'nullable|array',
+            'editRoleIds.*' => 'integer|exists:roles,id',
         ]);
 
-        $user = User::findOrFail($this->editingUserId);
+        $user = User::with('office.level')->findOrFail($this->editingUserId);
 
         // Check if current user can manage this user
         if (!$this->canManageUser($user)) {
             abort(403, 'You do not have permission to edit this user.');
+        }
+
+        // Validate roles against office level (check against NEW office if being changed)
+        if (!empty($this->editRoleIds)) {
+            // Use the NEW office if being changed, otherwise use current office
+            $officeIdToCheck = $this->editOfficeId ?? $user->office_id;
+
+            if ($officeIdToCheck) {
+                $office = Office::with('level')->find($officeIdToCheck);
+                $userOfficeLevel = $office?->level?->level;
+
+                if ($userOfficeLevel) {
+                    foreach ($this->editRoleIds as $roleId) {
+                        $role = Role::find($roleId);
+                        if ($role && $role->office_level_id) {
+                            // Get the office level number from office_level_id
+                            $requiredLevel = OfficeLevel::find($role->office_level_id)?->level;
+
+                            if ($requiredLevel && $requiredLevel !== $userOfficeLevel) {
+                                $this->addError('editRoleIds', "Role '{$role->name}' requires user to be at a different office level.");
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         $user->update([
@@ -299,8 +330,15 @@ new class extends Component
             'is_admin' => $this->editIsAdmin,
         ]);
 
+        // Sync roles with assigned_by tracking
+        $syncData = [];
+        foreach ($this->editRoleIds as $roleId) {
+            $syncData[$roleId] = ['assigned_by' => Auth::id()];
+        }
+        $user->roles()->sync($syncData);
+
         $this->showEditModal = false;
-        $this->reset(['editingUserId', 'editName', 'editPhone', 'editNrp', 'editOfficeId', 'editIsAdmin']);
+        $this->reset(['editingUserId', 'editName', 'editPhone', 'editNrp', 'editOfficeId', 'editIsAdmin', 'editRoleIds']);
     }
 
     public function openProjectModal(int $userId): void
@@ -741,6 +779,34 @@ new class extends Component
                         </optgroup>
                     @endforeach
                 </flux:select>
+            </div>
+
+            <div>
+                <label class="mb-2 block text-sm font-medium text-neutral-900 dark:text-neutral-100">Roles</label>
+                @error('editRoleIds')
+                    <p class="mb-2 text-sm text-red-600 dark:text-red-400">{{ $message }}</p>
+                @enderror
+                <div class="space-y-2">
+                    @foreach($roles as $role)
+                        <label class="flex items-center gap-2 cursor-pointer">
+                            <input
+                                type="checkbox"
+                                wire:model="editRoleIds"
+                                value="{{ $role->id }}"
+                                class="rounded border-neutral-300 text-blue-600 focus:ring-blue-500 dark:border-neutral-600"
+                            />
+                            <span class="text-sm font-medium text-neutral-900 dark:text-neutral-100">{{ $role->name }}</span>
+                            @if($role->office_level_id)
+                                @php
+                                    $officeLevel = \App\Models\OfficeLevel::find($role->office_level_id);
+                                @endphp
+                                <span class="text-xs text-neutral-500 dark:text-neutral-400">
+                                    (Requires {{ $officeLevel?->name ?? 'specific office level' }})
+                                </span>
+                            @endif
+                        </label>
+                    @endforeach
+                </div>
             </div>
 
             <flux:checkbox wire:model="editIsAdmin" label="Grant admin privileges" />

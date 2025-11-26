@@ -17,6 +17,7 @@ class TaskFactory extends Factory
     public function definition(): array
     {
         return [
+            'project_id' => \App\Models\Project::factory(),
             'name' => fake()->sentence(3),
             'volume' => fake()->randomFloat(2, 0, 99999),
             'unit' => fake()->optional()->randomElement(['m3', 'm2', 'm', 'kg', 'pcs', 'unit']),
