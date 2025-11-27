@@ -682,11 +682,6 @@ new class extends Component
                 @error('selectedDate')
                     <p class="mt-1 text-xs text-red-600 dark:text-red-400">{{ $message }}</p>
                 @enderror
-                @if($selectedProject && $selectedProject->start_date && $selectedProject->end_date)
-                    <p class="mt-1 text-xs text-neutral-600 dark:text-neutral-400">
-                        Project timeline: {{ \Carbon\Carbon::parse($selectedProject->start_date)->format('M d, Y') }} to {{ \Carbon\Carbon::parse($selectedProject->end_date)->format('M d, Y') }}
-                    </p>
-                @endif
             </div>
         </div>
 
