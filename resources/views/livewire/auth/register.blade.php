@@ -56,7 +56,7 @@ new class extends Component
         // Create user via Fortify action
         app(\Laravel\Fortify\Contracts\CreatesNewUsers::class)->create([
             'name' => $this->name,
-            'email' => $this->email,
+            'email' => $this->email ?: null, // Convert empty string to null
             'nrp' => $this->nrp,
             'phone' => $this->phone,
             'office_id' => $this->officeId ?: $this->kodimId, // Use Koramil if selected, otherwise use Kodim

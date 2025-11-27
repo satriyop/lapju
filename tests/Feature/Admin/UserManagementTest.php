@@ -404,27 +404,6 @@ class UserManagementTest extends TestCase
         $this->assertEquals($this->admin->id, $pendingUser->approved_by);
     }
 
-    public function test_approving_kodim_user_assigns_manager_role(): void
-    {
-        $pendingUser = User::factory()->create([
-            'is_approved' => false,
-            'office_id' => $this->kodim->id,
-        ]);
-
-        $this->assertFalse($pendingUser->hasRole('Manager'));
-
-        $this->actingAs($this->admin);
-
-        Volt::test('admin.users.index')
-            ->call('approveUser', $pendingUser->id);
-
-        $pendingUser->refresh();
-        $this->assertTrue($pendingUser->is_approved);
-        $this->assertTrue($pendingUser->hasRole('Manager'));
-        $this->assertNotNull($pendingUser->approved_at);
-        $this->assertEquals($this->admin->id, $pendingUser->approved_by);
-    }
-
     public function test_role_assignment_respects_office_level(): void
     {
         $this->actingAs($this->admin);

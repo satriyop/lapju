@@ -149,4 +149,64 @@ class RegistrationTest extends TestCase
             ->call('register')
             ->assertHasErrors(['phone' => 'required']);
     }
+
+    public function test_users_can_register_without_email(): void
+    {
+        // Email is optional/nullable - users can register with just phone number
+        $kodimLevel = OfficeLevel::factory()->create(['level' => 3, 'name' => 'Kodim']);
+        $kodim = Office::factory()->create(['level_id' => $kodimLevel->id]);
+
+        $koramilLevel = OfficeLevel::factory()->create(['level' => 4, 'name' => 'Koramil']);
+        $koramil = Office::factory()->create([
+            'level_id' => $koramilLevel->id,
+            'parent_id' => $kodim->id,
+        ]);
+
+        Volt::test('auth.register')
+            ->set('name', 'User Without Email')
+            ->set('email', '') // No email provided
+            ->set('nrp', '99887766')
+            ->set('phone', '08199887766')
+            ->set('kodimId', $kodim->id)
+            ->set('officeId', $koramil->id)
+            ->set('password', 'password123')
+            ->set('password_confirmation', 'password123')
+            ->call('register')
+            ->assertHasNoErrors()
+            ->assertRedirect(route('login'));
+
+        // Verify user was created without email
+        $user = User::where('phone', '08199887766')->first();
+        $this->assertNotNull($user);
+        $this->assertNull($user->email, 'Email should be NULL when not provided');
+        $this->assertEquals('User Without Email', $user->name);
+        $this->assertEquals('99887766', $user->nrp);
+        $this->assertEquals('08199887766', $user->phone);
+        $this->assertFalse($user->is_approved);
+    }
+
+    public function test_email_must_be_valid_if_provided(): void
+    {
+        // If email is provided, it must be a valid email format
+        $kodimLevel = OfficeLevel::factory()->create(['level' => 3, 'name' => 'Kodim']);
+        $kodim = Office::factory()->create(['level_id' => $kodimLevel->id]);
+
+        $koramilLevel = OfficeLevel::factory()->create(['level' => 4, 'name' => 'Koramil']);
+        $koramil = Office::factory()->create([
+            'level_id' => $koramilLevel->id,
+            'parent_id' => $kodim->id,
+        ]);
+
+        Volt::test('auth.register')
+            ->set('name', 'Test User')
+            ->set('email', 'not-a-valid-email') // Invalid email format
+            ->set('nrp', '11223344')
+            ->set('phone', '08111223344')
+            ->set('kodimId', $kodim->id)
+            ->set('officeId', $koramil->id)
+            ->set('password', 'password123')
+            ->set('password_confirmation', 'password123')
+            ->call('register')
+            ->assertHasErrors(['email']);
+    }
 }

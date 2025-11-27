@@ -2,8 +2,8 @@
 
 namespace Tests\Feature;
 
-use App\Models\Customer;
 use App\Models\Location;
+use App\Models\Partner;
 use App\Models\Project;
 use App\Models\Task;
 use App\Models\TaskProgress;
@@ -27,16 +27,24 @@ class ProgressDateValidationTest extends TestCase
     {
         parent::setUp();
 
-        $this->user = User::factory()->create();
+        // Create admin user with full permissions
+        $this->user = User::factory()->create([
+            'is_admin' => true,
+            'is_approved' => true,
+        ]);
+
         $location = Location::factory()->create();
-        $customer = Customer::factory()->create();
+        $partner = Partner::factory()->create();
 
         $this->project = Project::factory()->create([
             'location_id' => $location->id,
-            'customer_id' => $customer->id,
+            'partner_id' => $partner->id,
+            'start_date' => now()->subDays(30),
+            'end_date' => now()->addDays(30),
         ]);
 
         $this->task = Task::factory()->create([
+            'project_id' => $this->project->id,
             'parent_id' => null,
             '_lft' => 1,
             '_rgt' => 2,
@@ -63,6 +71,7 @@ class ProgressDateValidationTest extends TestCase
         $progress = TaskProgress::where('task_id', $this->task->id)
             ->where('project_id', $this->project->id)
             ->where('user_id', $this->user->id)
+            ->whereDate('progress_date', $today)
             ->first();
 
         $this->assertNotNull($progress);
@@ -91,6 +100,7 @@ class ProgressDateValidationTest extends TestCase
         $progress = TaskProgress::where('task_id', $this->task->id)
             ->where('project_id', $this->project->id)
             ->where('user_id', $this->user->id)
+            ->whereDate('progress_date', $pastDate)
             ->first();
 
         $this->assertNotNull($progress);
@@ -158,7 +168,9 @@ class ProgressDateValidationTest extends TestCase
             ->assertHasNoErrors();
 
         $initialCount = TaskProgress::count();
-        $this->assertEquals(1, $initialCount);
+        // Note: Initial save triggers S-curve backfilling from project start date
+        // So count will be > 1 (includes backfilled entries)
+        $this->assertGreaterThan(0, $initialCount);
 
         // Second save with same date should update
         $component->set('progressData', [
@@ -169,11 +181,14 @@ class ProgressDateValidationTest extends TestCase
         ])->call('saveProgress', $this->task->id)
             ->assertHasNoErrors();
 
-        // Should still have only 1 record
+        // Should still have same total count (update, not insert)
         $finalCount = TaskProgress::count();
-        $this->assertEquals(1, $finalCount);
+        $this->assertEquals($initialCount, $finalCount);
 
-        $updatedProgress = TaskProgress::first();
+        // Get the progress entry for today specifically
+        $updatedProgress = TaskProgress::where('task_id', $this->task->id)
+            ->whereDate('progress_date', $today)
+            ->first();
         $this->assertEquals(80.0, $updatedProgress->percentage);
         $this->assertEquals('Updated progress', $updatedProgress->notes);
     }

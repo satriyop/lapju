@@ -270,7 +270,7 @@ new class extends Component
 
         $this->editingUserId = $user->id;
         $this->editName = $user->name;
-        $this->editPhone = $user->phone;
+        $this->editPhone = $user->phone ?? '';
         $this->editNrp = $user->nrp ?? '';
         $this->editOfficeId = $user->office_id;
         $this->editIsAdmin = $user->is_admin;
