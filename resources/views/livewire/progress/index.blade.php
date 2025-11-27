@@ -70,15 +70,7 @@ new class extends Component
             $this->selectedProjectId = $firstProject->id;
             $this->loadProgressData();
             $this->loadExistingPhotos();
-
-            // Auto-select first root task tab for the selected project
-            $rootTasks = Task::where('project_id', $this->selectedProjectId)
-                ->whereNull('parent_id')
-                ->orderBy('_lft')
-                ->get();
-            if ($rootTasks->isNotEmpty()) {
-                $this->activeTab = $rootTasks->first()->id;
-            }
+            // Note: activeTab will be set in with() to avoid duplicate query
         }
     }
 
@@ -115,29 +107,26 @@ new class extends Component
             return [];
         }
 
-        // Get the latest progress UP TO the selected date (not all time)
+        // Single query using correlated subquery (SQLite compatible)
+        // Gets the latest progress entry for each task up to the selected date
         $latestProgress = TaskProgress::where('project_id', $this->selectedProjectId)
             ->whereDate('progress_date', '<=', $this->selectedDate)
-            ->select('task_id')
-            ->selectRaw('MAX(progress_date) as latest_date')
-            ->groupBy('task_id')
+            ->whereRaw('progress_date = (
+                SELECT MAX(tp2.progress_date)
+                FROM task_progress tp2
+                WHERE tp2.project_id = task_progress.project_id
+                AND tp2.task_id = task_progress.task_id
+                AND DATE(tp2.progress_date) <= ?
+            )', [$this->selectedDate])
             ->get();
 
         $progressMap = [];
-
-        foreach ($latestProgress as $progress) {
-            $latestEntry = TaskProgress::where('project_id', $this->selectedProjectId)
-                ->where('task_id', $progress->task_id)
-                ->where('progress_date', $progress->latest_date)
-                ->first();
-
-            if ($latestEntry) {
-                $progressMap[$progress->task_id] = [
-                    'percentage' => (float) $latestEntry->percentage,
-                    'progress_date' => $latestEntry->progress_date,
-                    'notes' => $latestEntry->notes,
-                ];
-            }
+        foreach ($latestProgress as $entry) {
+            $progressMap[$entry->task_id] = [
+                'percentage' => (float) $entry->percentage,
+                'progress_date' => $entry->progress_date,
+                'notes' => $entry->notes,
+            ];
         }
 
         return $progressMap;
@@ -192,16 +181,8 @@ new class extends Component
         $this->loadProgressData();
         $this->loadExistingPhotos();
 
-        // Reset to first tab when project changes - filter by selected project
-        if ($this->selectedProjectId) {
-            $rootTasks = Task::where('project_id', $this->selectedProjectId)
-                ->whereNull('parent_id')
-                ->orderBy('_lft')
-                ->get();
-            if ($rootTasks->isNotEmpty()) {
-                $this->activeTab = $rootTasks->first()->id;
-            }
-        }
+        // Reset activeTab so with() will set it to first tab of new project
+        $this->activeTab = null;
     }
 
     public function updatedSelectedDate(): void
@@ -280,6 +261,7 @@ new class extends Component
 
         if (! $project) {
             $this->addError('project', 'Project not found.');
+
             return;
         }
 
@@ -292,6 +274,7 @@ new class extends Component
             if ($currentUser->hasRole('Reporter')) {
                 if (! $project->users()->where('users.id', $currentUser->id)->exists()) {
                     $this->addError('project', 'You are not assigned to this project.');
+
                     return;
                 }
             }
@@ -301,12 +284,14 @@ new class extends Component
 
                 if (! $userOffice || $userOffice->level->level !== 3) {
                     $this->addError('project', 'Invalid office assignment.');
+
                     return;
                 }
 
                 // Check if project's office is a child of the Kodim Admin's office
                 if (! $project->office || $project->office->parent_id !== $currentUser->office_id) {
                     $this->addError('project', 'You do not have access to this project.');
+
                     return;
                 }
             }
@@ -314,12 +299,14 @@ new class extends Component
             elseif ($currentUser->hasRole('Koramil Admin') && $currentUser->office_id) {
                 if (! $project->office || $project->office_id !== $currentUser->office_id) {
                     $this->addError('project', 'You do not have access to this project.');
+
                     return;
                 }
             }
             // Other roles: deny access unless explicitly handled
             else {
                 $this->addError('project', 'You do not have permission to update progress.');
+
                 return;
             }
         }
@@ -412,6 +399,7 @@ new class extends Component
 
         if (! $project) {
             $this->addError("photos.{$rootTaskId}", 'Project not found.');
+
             return;
         }
 
@@ -424,6 +412,7 @@ new class extends Component
             if ($currentUser->hasRole('Reporter')) {
                 if (! $project->users()->where('users.id', $currentUser->id)->exists()) {
                     $this->addError("photos.{$rootTaskId}", 'You are not assigned to this project.');
+
                     return;
                 }
             }
@@ -433,12 +422,14 @@ new class extends Component
 
                 if (! $userOffice || $userOffice->level->level !== 3) {
                     $this->addError("photos.{$rootTaskId}", 'Invalid office assignment.');
+
                     return;
                 }
 
                 // Check if project's office is a child of the Kodim Admin's office
                 if (! $project->office || $project->office->parent_id !== $currentUser->office_id) {
                     $this->addError("photos.{$rootTaskId}", 'You do not have access to this project.');
+
                     return;
                 }
             }
@@ -446,12 +437,14 @@ new class extends Component
             elseif ($currentUser->hasRole('Koramil Admin') && $currentUser->office_id) {
                 if (! $project->office || $project->office_id !== $currentUser->office_id) {
                     $this->addError("photos.{$rootTaskId}", 'You do not have access to this project.');
+
                     return;
                 }
             }
             // Other roles: deny access unless explicitly handled
             else {
                 $this->addError("photos.{$rootTaskId}", 'You do not have permission to upload photos.');
+
                 return;
             }
         }
@@ -595,15 +588,19 @@ new class extends Component
         $allTasks = collect();
 
         if ($this->selectedProjectId) {
-            $rootTasks = Task::where('project_id', $this->selectedProjectId)
-                ->whereNull('parent_id')
-                ->orderBy('_lft')
-                ->get();
-
+            // Load all tasks once, then filter for root tasks (avoids duplicate query)
             $allTasks = Task::where('project_id', $this->selectedProjectId)
                 ->with(['parent:id,name', 'children:id,parent_id'])
                 ->orderBy('_lft')
                 ->get();
+
+            // Derive rootTasks from allTasks (no extra query)
+            $rootTasks = $allTasks->whereNull('parent_id')->values();
+
+            // Auto-select first tab if not set (centralizes logic, avoids duplicate queries)
+            if ($this->activeTab === null && $rootTasks->isNotEmpty()) {
+                $this->activeTab = $rootTasks->first()->id;
+            }
         }
 
         // Get latest progress for all tasks
@@ -615,6 +612,38 @@ new class extends Component
         // Get selected project for date range display
         $selectedProject = $this->selectedProjectId ? Project::find($this->selectedProjectId) : null;
 
+        // Pre-compute task depths using loaded collection (avoids N+1 in Blade)
+        $taskDepths = [];
+        foreach ($allTasks as $task) {
+            $depth = 0;
+            $currentId = $task->parent_id;
+            while ($currentId !== null) {
+                $depth++;
+                $parent = $allTasks->firstWhere('id', $currentId);
+                $currentId = $parent?->parent_id;
+            }
+            $taskDepths[$task->id] = $depth;
+        }
+
+        // Pre-compute which root tasks have descendant progress (avoids N+1 in Blade)
+        // Note: Original hasAnyDescendantProgress() checks ALL TIME (no date filter)
+        $rootTasksWithProgress = [];
+        if ($this->selectedProjectId && $rootTasks->isNotEmpty()) {
+            $taskIdsWithProgressAllTime = TaskProgress::where('project_id', $this->selectedProjectId)
+                ->distinct()
+                ->pluck('task_id')
+                ->toArray();
+
+            foreach ($rootTasks as $rootTask) {
+                $leafDescendants = $allTasks
+                    ->filter(fn ($t) => $t->_lft > $rootTask->_lft && $t->_rgt < $rootTask->_rgt)
+                    ->filter(fn ($t) => $t->children->isEmpty());
+
+                $leafTaskIds = $leafDescendants->pluck('id')->toArray();
+                $rootTasksWithProgress[$rootTask->id] = ! empty(array_intersect($leafTaskIds, $taskIdsWithProgressAllTime));
+            }
+        }
+
         return [
             'projects' => $projects,
             'rootTasks' => $rootTasks,
@@ -622,6 +651,8 @@ new class extends Component
             'latestProgressMap' => $latestProgressMap,
             'parentProgressMap' => $parentProgressMap,
             'selectedProject' => $selectedProject,
+            'taskDepths' => $taskDepths,
+            'rootTasksWithProgress' => $rootTasksWithProgress,
         ];
     }
 }; ?>
@@ -765,21 +796,19 @@ new class extends Component
 
                         @foreach($descendants as $task)
                             @php
-                                // Calculate depth
-                                $depth = 0;
-                                $current = $task;
-                                $parentChain = [];
-
-                                while ($current->parent_id) {
-                                    $depth++;
-                                    $parent = Task::find($current->parent_id);
-                                    if (!$parent) break;
-                                    $parentChain[] = $parent->id;
-                                    $current = $parent;
-                                }
-
+                                // Use pre-computed depth (avoids N+1 queries)
+                                $depth = $taskDepths[$task->id] ?? 0;
                                 $task->depth = $depth;
                                 $task->has_children = $task->children->count() > 0;
+
+                                // Build parent chain using in-memory collection (no DB queries)
+                                $parentChain = [];
+                                $currentId = $task->parent_id;
+                                while ($currentId !== null) {
+                                    $parentChain[] = $currentId;
+                                    $parent = $allTasks->firstWhere('id', $currentId);
+                                    $currentId = $parent?->parent_id;
+                                }
 
                                 // Check visibility
                                 $isVisible = $depth == 0 || empty($parentChain) || count(array_intersect($parentChain, $expandedTasks)) === count($parentChain);
@@ -969,7 +998,7 @@ new class extends Component
                             @php
                                 $existingPhoto = $existingPhotos[$rootTask->id] ?? null;
                                 $hasPreview = isset($photos[$rootTask->id]);
-                                $hasDescendantProgress = $rootTask->hasAnyDescendantProgress();
+                                $hasDescendantProgress = $rootTasksWithProgress[$rootTask->id] ?? false;
                             @endphp
 
                             @if(!$hasDescendantProgress)
