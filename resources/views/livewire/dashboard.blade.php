@@ -1346,11 +1346,24 @@ new class extends Component
             : collect();
 
         $kodims = $kodimLevel && $this->selectedKoremId
-            ? Office::where('level_id', $kodimLevel->id)->where('parent_id', $this->selectedKoremId)->orderBy('name')->get()
+            ? Office::where('level_id', $kodimLevel->id)
+                ->where('parent_id', $this->selectedKoremId)
+                ->selectRaw('offices.*, (
+                    SELECT COUNT(*) FROM projects
+                    WHERE projects.office_id IN (
+                        SELECT id FROM offices AS koramils WHERE koramils.parent_id = offices.id
+                    )
+                ) as projects_count')
+                ->orderBy('name')
+                ->get()
             : collect();
 
         $koramils = $koramilLevel && $this->selectedKodimId
-            ? Office::where('level_id', $koramilLevel->id)->where('parent_id', $this->selectedKodimId)->orderBy('name')->get()
+            ? Office::where('level_id', $koramilLevel->id)
+                ->where('parent_id', $this->selectedKodimId)
+                ->withCount('projects')
+                ->orderBy('name')
+                ->get()
             : collect();
 
         // Calculate statistics based on filtered data (always visible)
@@ -1698,7 +1711,7 @@ new class extends Component
                     <option value="">{{ $this->selectedKoremId ? 'Select Kodim...' : 'Select Korem first' }}</option>
                     @foreach($kodims as $kodim)
                         <option value="{{ $kodim->id }}">
-                            {{ $kodim->name }}
+                            {{ $kodim->name }} ({{ $kodim->projects_count }})
                         </option>
                     @endforeach
                 </flux:select>
@@ -1708,7 +1721,7 @@ new class extends Component
                     <option value="">{{ $this->selectedKodimId ? 'All Koramil' : 'Select Kodim first' }}</option>
                     @foreach($koramils as $koramil)
                         <option value="{{ $koramil->id }}">
-                            {{ $koramil->name }}
+                            {{ $koramil->name }} ({{ $koramil->projects_count }})
                         </option>
                     @endforeach
                 </flux:select>
