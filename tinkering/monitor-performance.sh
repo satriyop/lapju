@@ -69,8 +69,8 @@ if [ -f "$DB_PATH" ]; then
     sqlite3 "$DB_PATH" << 'EOF'
 .mode column
 SELECT
-    'Projects' as Table,
-    (SELECT COUNT(*) FROM projects) as Count
+    'Projects' as TableName,
+    (SELECT COUNT(*) FROM projects) as RecordCount
 UNION ALL
 SELECT 'Tasks', (SELECT COUNT(*) FROM tasks)
 UNION ALL

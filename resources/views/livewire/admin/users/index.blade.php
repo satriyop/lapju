@@ -63,6 +63,13 @@ new class extends Component
 
     public bool $createIsApproved = true;
 
+    // User deletion with reassignment properties
+    public bool $showReassignModal = false;
+
+    public ?int $deletingUserId = null;
+
+    public array $projectReassignments = [];
+
     public function mount(): void
     {
         // Check if user has permission to manage users
@@ -163,7 +170,7 @@ new class extends Component
         $user = User::findOrFail($userId);
 
         // Check if current user can manage this user
-        if (!$this->canManageUser($user)) {
+        if (! $this->canManageUser($user)) {
             abort(403, 'You do not have permission to approve this user.');
         }
 
@@ -214,7 +221,7 @@ new class extends Component
         }
 
         // Must have office assigned
-        if (!$currentUser->office_id || !$targetUser->office_id) {
+        if (! $currentUser->office_id || ! $targetUser->office_id) {
             return false;
         }
 
@@ -223,6 +230,7 @@ new class extends Component
         // If Manager at Kodim level, can only manage users in Koramil under their Kodim
         if ($currentOffice && $currentOffice->level->level === 3) {
             $targetOffice = Office::find($targetUser->office_id);
+
             return $targetOffice && $targetOffice->parent_id === $currentUser->office_id;
         }
 
@@ -239,7 +247,7 @@ new class extends Component
         $user = User::findOrFail($userId);
 
         // Check if current user can manage this user
-        if (!$this->canManageUser($user)) {
+        if (! $this->canManageUser($user)) {
             abort(403, 'You do not have permission to reject this user.');
         }
 
@@ -249,7 +257,7 @@ new class extends Component
     public function toggleAdmin(int $userId): void
     {
         // Only admins can toggle admin status
-        if (!Auth::user()->isAdmin()) {
+        if (! Auth::user()->isAdmin()) {
             abort(403, 'Only admins can change admin status.');
         }
 
@@ -264,7 +272,7 @@ new class extends Component
         $user = User::with('roles')->findOrFail($userId);
 
         // Check if current user can manage this user
-        if (!$this->canManageUser($user)) {
+        if (! $this->canManageUser($user)) {
             abort(403, 'You do not have permission to edit this user.');
         }
 
@@ -292,12 +300,12 @@ new class extends Component
         $user = User::with('office.level')->findOrFail($this->editingUserId);
 
         // Check if current user can manage this user
-        if (!$this->canManageUser($user)) {
+        if (! $this->canManageUser($user)) {
             abort(403, 'You do not have permission to edit this user.');
         }
 
         // Validate roles against office level (check against NEW office if being changed)
-        if (!empty($this->editRoleIds)) {
+        if (! empty($this->editRoleIds)) {
             // Use the NEW office if being changed, otherwise use current office
             $officeIdToCheck = $this->editOfficeId ?? $user->office_id;
 
@@ -314,6 +322,7 @@ new class extends Component
 
                             if ($requiredLevel && $requiredLevel !== $userOfficeLevel) {
                                 $this->addError('editRoleIds', "Role '{$role->name}' requires user to be at a different office level.");
+
                                 return;
                             }
                         }
@@ -394,16 +403,127 @@ new class extends Component
 
     public function deleteUser(int $userId): void
     {
-        $user = User::findOrFail($userId);
+        $user = User::with('projects')->findOrFail($userId);
 
         // Check if current user can manage this user
-        if (!$this->canManageUser($user)) {
+        if (! $this->canManageUser($user)) {
             abort(403, 'You do not have permission to delete this user.');
         }
 
-        if ($user->id !== Auth::id()) {
+        // Prevent deleting self
+        if ($user->id === Auth::id()) {
+            return;
+        }
+
+        // Check if user has assigned projects
+        if ($user->projects->count() > 0) {
+            // Show reassignment modal instead of deleting directly
+            $this->prepareUserDeletion($userId);
+        } else {
+            // No projects, safe to delete directly
             $user->delete();
         }
+    }
+
+    public function prepareUserDeletion(int $userId): void
+    {
+        $user = User::with('projects')->findOrFail($userId);
+
+        // Check if current user can manage this user
+        if (! $this->canManageUser($user)) {
+            abort(403, 'You do not have permission to delete this user.');
+        }
+
+        $this->deletingUserId = $userId;
+
+        // Initialize reassignment array with null for each project
+        $this->projectReassignments = [];
+        foreach ($user->projects as $project) {
+            $this->projectReassignments[$project->id] = null;
+        }
+
+        $this->showReassignModal = true;
+    }
+
+    public function reassignAndDeleteUser(): void
+    {
+        $user = User::with('projects')->findOrFail($this->deletingUserId);
+
+        // Check if current user can manage this user
+        if (! $this->canManageUser($user)) {
+            abort(403, 'You do not have permission to delete this user.');
+        }
+
+        // Validate that all projects have been reassigned
+        foreach ($user->projects as $project) {
+            if (empty($this->projectReassignments[$project->id])) {
+                $this->addError('projectReassignments', 'Please assign a replacement user for all projects.');
+
+                return;
+            }
+        }
+
+        // Perform reassignments
+        foreach ($this->projectReassignments as $projectId => $newUserId) {
+            $project = Project::findOrFail($projectId);
+
+            // Get current project users
+            $currentUserIds = $project->users()->pluck('users.id')->toArray();
+
+            // Remove the user being deleted
+            $currentUserIds = array_diff($currentUserIds, [$user->id]);
+
+            // Add the new user if not already assigned
+            if (! in_array($newUserId, $currentUserIds)) {
+                $currentUserIds[] = $newUserId;
+            }
+
+            // Sync the updated user list
+            $project->users()->sync($currentUserIds);
+        }
+
+        // Now safe to delete the user
+        $user->delete();
+
+        // Reset state
+        $this->showReassignModal = false;
+        $this->reset(['deletingUserId', 'projectReassignments']);
+    }
+
+    private function getEligibleReplacementUsers()
+    {
+        if (! $this->deletingUserId) {
+            return collect();
+        }
+
+        $userBeingDeleted = User::findOrFail($this->deletingUserId);
+        $currentUser = Auth::user();
+
+        // Build query for eligible users
+        $query = User::query()
+            ->where('id', '!=', $this->deletingUserId) // Exclude user being deleted
+            ->where('is_approved', true) // Only approved users
+            ->with('office.level', 'roles');
+
+        // Apply coverage filtering based on current user's permissions
+        if (! $currentUser->isAdmin() && $currentUser->office_id) {
+            $currentOffice = Office::with('level')->find($currentUser->office_id);
+
+            if ($currentOffice) {
+                // Kodim Admins can only assign to users in Koramils under their Kodim
+                if ($currentOffice->level->level === 3) {
+                    $query->whereHas('office', function ($q) use ($currentUser) {
+                        $q->where('parent_id', $currentUser->office_id);
+                    });
+                }
+                // Koramil Admins can only assign to users in their exact Koramil
+                elseif ($currentOffice->level->level === 4) {
+                    $query->where('office_id', $currentUser->office_id);
+                }
+            }
+        }
+
+        return $query->orderBy('name')->get();
     }
 
     /**
@@ -462,15 +582,15 @@ new class extends Component
                 $children = $this->buildOfficeTree($offices, $usersByOffice, $office->id, $level + 1);
 
                 // Only include office if it has users OR has children with users
-                if ($officeUsers->isNotEmpty() || !empty($children)) {
+                if ($officeUsers->isNotEmpty() || ! empty($children)) {
                     $tree[] = [
                         'office' => $office,
                         'users' => $officeUsers,
                         'children' => $children,
                         'level' => $level,
-                        'user_count' => $officeUsers->count() + collect($children)->sum(fn($child) => $child['user_count']),
+                        'user_count' => $officeUsers->count() + collect($children)->sum(fn ($child) => $child['user_count']),
                         'pending_count' => $officeUsers->where('is_approved', false)->count() +
-                                         collect($children)->sum(fn($child) => $child['pending_count']),
+                                         collect($children)->sum(fn ($child) => $child['pending_count']),
                     ];
                 }
             }
@@ -535,7 +655,7 @@ new class extends Component
 
         // Managers can only see users under their Kodim coverage
         // Koramil Admins can only see users in their exact office
-        if (!$isAdmin && $currentUser->office_id) {
+        if (! $isAdmin && $currentUser->office_id) {
             $currentOffice = Office::with('level')->find($currentUser->office_id);
 
             // If user is at Kodim level (Manager), filter users to only show Koramil under their Kodim
@@ -554,14 +674,13 @@ new class extends Component
 
         // Count pending users with coverage filter
         $pendingCountQuery = User::where('is_approved', false);
-        if (!$isAdmin && $currentUser->office_id) {
+        if (! $isAdmin && $currentUser->office_id) {
             $currentOffice = Office::with('level')->find($currentUser->office_id);
             if ($currentOffice && $currentOffice->level->level === 3) {
                 $pendingCountQuery->whereHas('office', function ($q) use ($currentUser) {
                     $q->where('parent_id', $currentUser->office_id);
                 });
-            }
-            elseif ($currentOffice && $currentOffice->level->level === 4) {
+            } elseif ($currentOffice && $currentOffice->level->level === 4) {
                 $pendingCountQuery->where('office_id', $currentUser->office_id);
             }
         }
@@ -587,13 +706,12 @@ new class extends Component
 
                 // Managers can only assign users to Koramils under their Kodim
                 // Koramil Admins can only assign users to their own Koramil
-                if (!$isAdmin && $currentUser->office_id) {
+                if (! $isAdmin && $currentUser->office_id) {
                     $currentOffice = Office::with('level')->find($currentUser->office_id);
                     if ($currentOffice && $currentOffice->level->level === 3) {
                         // If Manager, only show Koramils under their Kodim
                         $officesQuery->where('parent_id', $currentUser->office_id);
-                    }
-                    elseif ($currentOffice && $currentOffice->level->level === 4) {
+                    } elseif ($currentOffice && $currentOffice->level->level === 4) {
                         // If Koramil Admin, only show their own office
                         $officesQuery->where('id', $currentUser->office_id);
                     }
@@ -606,12 +724,11 @@ new class extends Component
 
                 // Managers can only assign to offices under their coverage
                 // Koramil Admins can only assign to their own office
-                if (!$isAdmin && $currentUser->office_id) {
+                if (! $isAdmin && $currentUser->office_id) {
                     $currentOffice = Office::with('level')->find($currentUser->office_id);
                     if ($currentOffice && $currentOffice->level->level === 3) {
                         $officesQuery->where('parent_id', $currentUser->office_id);
-                    }
-                    elseif ($currentOffice && $currentOffice->level->level === 4) {
+                    } elseif ($currentOffice && $currentOffice->level->level === 4) {
                         $officesQuery->where('id', $currentUser->office_id);
                     }
                 }
@@ -622,6 +739,13 @@ new class extends Component
 
         $users = $query->get();
 
+        // Get data for reassignment modal
+        $deletingUser = $this->deletingUserId
+            ? User::with('projects.location', 'projects.partner', 'projects.office')->find($this->deletingUserId)
+            : null;
+
+        $eligibleReplacementUsers = $this->getEligibleReplacementUsers();
+
         return [
             'users' => $users,
             'officeHierarchy' => $this->buildOfficeHierarchy($users),
@@ -631,6 +755,8 @@ new class extends Component
             'offices' => $offices,
             'roles' => $roles,
             'availableOffices' => $availableOffices,
+            'deletingUser' => $deletingUser,
+            'eligibleReplacementUsers' => $eligibleReplacementUsers,
         ];
     }
 }; ?>
@@ -983,5 +1109,78 @@ new class extends Component
                 </flux:button>
             </div>
         </form>
+    </flux:modal>
+
+    <!-- Reassign Projects Modal -->
+    <flux:modal wire:model="showReassignModal" class="min-w-[600px]">
+        <div class="space-y-4">
+            <div>
+                <flux:heading size="lg">Reassign Projects Before Deletion</flux:heading>
+                @if($deletingUser)
+                    <p class="mt-2 text-sm text-neutral-600 dark:text-neutral-400">
+                        User <strong>{{ $deletingUser->name }}</strong> is assigned to {{ $deletingUser->projects->count() }} {{ Str::plural('project', $deletingUser->projects->count()) }}.
+                        Please assign a replacement user for each project before deletion.
+                    </p>
+                @endif
+            </div>
+
+            @error('projectReassignments')
+                <div class="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800 dark:border-red-800 dark:bg-red-900/20 dark:text-red-200">
+                    {{ $message }}
+                </div>
+            @enderror
+
+            <div class="max-h-[500px] space-y-3 overflow-y-auto">
+                @if($deletingUser)
+                    @foreach($deletingUser->projects as $project)
+                        <div class="rounded-lg border border-neutral-200 p-4 dark:border-neutral-700">
+                            <div class="mb-3">
+                                <div class="font-semibold text-neutral-900 dark:text-neutral-100">{{ $project->name }}</div>
+                                <div class="mt-1 text-sm text-neutral-600 dark:text-neutral-400">
+                                    {{ $project->location?->village_name ?? '-' }}
+                                    @if($project->office)
+                                        • {{ $project->office->name }}
+                                    @endif
+                                </div>
+                            </div>
+
+                            <div>
+                                <label class="mb-1 block text-sm font-medium text-neutral-700 dark:text-neutral-300">
+                                    Assign to:
+                                </label>
+                                <flux:select wire:model="projectReassignments.{{ $project->id }}" required>
+                                    <flux:select.option value="">Select replacement user</flux:select.option>
+                                    @foreach($eligibleReplacementUsers as $user)
+                                        <flux:select.option value="{{ $user->id }}">
+                                            {{ $user->name }}
+                                            @if($user->office)
+                                                - {{ $user->office->name }}
+                                            @endif
+                                            @if($user->roles->count() > 0)
+                                                ({{ $user->roles->pluck('name')->implode(', ') }})
+                                            @endif
+                                        </flux:select.option>
+                                    @endforeach
+                                </flux:select>
+                            </div>
+                        </div>
+                    @endforeach
+                @endif
+            </div>
+
+            <div class="flex justify-end gap-3 border-t border-neutral-200 pt-4 dark:border-neutral-700">
+                <flux:button wire:click="$set('showReassignModal', false)" variant="outline">
+                    Cancel
+                </flux:button>
+                <flux:button
+                    wire:click="reassignAndDeleteUser"
+                    variant="danger"
+                    wire:loading.attr="disabled"
+                >
+                    <span wire:loading.remove wire:target="reassignAndDeleteUser">Reassign & Delete User</span>
+                    <span wire:loading wire:target="reassignAndDeleteUser">Processing...</span>
+                </flux:button>
+            </div>
+        </div>
     </flux:modal>
 </div>

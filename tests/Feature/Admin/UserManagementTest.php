@@ -6,6 +6,7 @@ namespace Tests\Feature\Admin;
 
 use App\Models\Office;
 use App\Models\OfficeLevel;
+use App\Models\Project;
 use App\Models\Role;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -425,5 +426,148 @@ class UserManagementTest extends TestCase
         $user = User::where('email', 'manager@example.com')->first();
         $this->assertTrue($user->hasRole('Manager'));
         $this->assertEquals($this->kodim->id, $user->office_id);
+    }
+
+    public function test_deleting_user_without_projects_works_directly(): void
+    {
+        $userToDelete = User::factory()->create([
+            'is_approved' => true,
+            'office_id' => $this->koramil->id,
+        ]);
+
+        $this->actingAs($this->admin);
+
+        Volt::test('admin.users.index')
+            ->call('deleteUser', $userToDelete->id)
+            ->assertSet('showReassignModal', false);
+
+        $this->assertDatabaseMissing('users', ['id' => $userToDelete->id]);
+    }
+
+    public function test_deleting_user_with_projects_shows_reassignment_modal(): void
+    {
+        $userToDelete = User::factory()->create([
+            'is_approved' => true,
+            'office_id' => $this->koramil->id,
+        ]);
+
+        $project = Project::factory()->create(['office_id' => $this->koramil->id]);
+        $project->users()->attach($userToDelete->id);
+
+        $this->actingAs($this->admin);
+
+        Volt::test('admin.users.index')
+            ->call('deleteUser', $userToDelete->id)
+            ->assertSet('showReassignModal', true)
+            ->assertSet('deletingUserId', $userToDelete->id);
+
+        // User should still exist
+        $this->assertDatabaseHas('users', ['id' => $userToDelete->id]);
+    }
+
+    public function test_reassignment_modal_validates_all_projects_assigned(): void
+    {
+        $userToDelete = User::factory()->create([
+            'is_approved' => true,
+            'office_id' => $this->koramil->id,
+        ]);
+
+        $project1 = Project::factory()->create(['office_id' => $this->koramil->id]);
+        $project2 = Project::factory()->create(['office_id' => $this->koramil->id]);
+        $project1->users()->attach($userToDelete->id);
+        $project2->users()->attach($userToDelete->id);
+
+        $this->actingAs($this->admin);
+
+        Volt::test('admin.users.index')
+            ->call('prepareUserDeletion', $userToDelete->id)
+            ->assertSet('showReassignModal', true)
+            ->call('reassignAndDeleteUser')
+            ->assertHasErrors(['projectReassignments']);
+
+        // User should still exist
+        $this->assertDatabaseHas('users', ['id' => $userToDelete->id]);
+    }
+
+    public function test_successful_project_reassignment_and_user_deletion(): void
+    {
+        $userToDelete = User::factory()->create([
+            'is_approved' => true,
+            'office_id' => $this->koramil->id,
+        ]);
+
+        $replacementUser = User::factory()->create([
+            'is_approved' => true,
+            'office_id' => $this->koramil->id,
+        ]);
+
+        $project = Project::factory()->create(['office_id' => $this->koramil->id]);
+        $project->users()->attach($userToDelete->id);
+
+        $this->actingAs($this->admin);
+
+        Volt::test('admin.users.index')
+            ->call('prepareUserDeletion', $userToDelete->id)
+            ->assertSet('showReassignModal', true)
+            ->set("projectReassignments.{$project->id}", $replacementUser->id)
+            ->call('reassignAndDeleteUser')
+            ->assertHasNoErrors()
+            ->assertSet('showReassignModal', false);
+
+        // User should be deleted
+        $this->assertDatabaseMissing('users', ['id' => $userToDelete->id]);
+
+        // Project should now be assigned to replacement user
+        $this->assertTrue($project->users()->where('users.id', $replacementUser->id)->exists());
+        $this->assertFalse($project->users()->where('users.id', $userToDelete->id)->exists());
+    }
+
+    public function test_reassignment_preserves_other_project_users(): void
+    {
+        $userToDelete = User::factory()->create([
+            'is_approved' => true,
+            'office_id' => $this->koramil->id,
+        ]);
+
+        $existingUser = User::factory()->create([
+            'is_approved' => true,
+            'office_id' => $this->koramil->id,
+        ]);
+
+        $replacementUser = User::factory()->create([
+            'is_approved' => true,
+            'office_id' => $this->koramil->id,
+        ]);
+
+        $project = Project::factory()->create(['office_id' => $this->koramil->id]);
+        $project->users()->attach([$userToDelete->id, $existingUser->id]);
+
+        $this->actingAs($this->admin);
+
+        Volt::test('admin.users.index')
+            ->call('prepareUserDeletion', $userToDelete->id)
+            ->set("projectReassignments.{$project->id}", $replacementUser->id)
+            ->call('reassignAndDeleteUser')
+            ->assertHasNoErrors();
+
+        // Existing user should still be assigned
+        $this->assertTrue($project->users()->where('users.id', $existingUser->id)->exists());
+
+        // Replacement user should be assigned
+        $this->assertTrue($project->users()->where('users.id', $replacementUser->id)->exists());
+
+        // Deleted user should not be assigned
+        $this->assertFalse($project->users()->where('users.id', $userToDelete->id)->exists());
+    }
+
+    public function test_cannot_delete_self(): void
+    {
+        $this->actingAs($this->admin);
+
+        Volt::test('admin.users.index')
+            ->call('deleteUser', $this->admin->id);
+
+        // Admin should still exist
+        $this->assertDatabaseHas('users', ['id' => $this->admin->id]);
     }
 }
