@@ -4,8 +4,10 @@ namespace App\Providers;
 
 use App\Models\Project;
 use App\Models\TaskProgress;
+use App\Models\TaskTemplate;
 use App\Observers\ProjectObserver;
 use App\Observers\TaskProgressObserver;
+use App\Observers\TaskTemplateObserver;
 use Illuminate\Support\ServiceProvider;
 
 class AppServiceProvider extends ServiceProvider
@@ -28,5 +30,8 @@ class AppServiceProvider extends ServiceProvider
 
         // Automatically backfill progress with S-curve on first entry
         TaskProgress::observe(TaskProgressObserver::class);
+
+        // Log changes to task templates for audit trail
+        TaskTemplate::observe(TaskTemplateObserver::class);
     }
 }

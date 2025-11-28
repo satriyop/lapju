@@ -1,5 +1,7 @@
 <?php
 
+use App\Models\Project;
+use App\Models\Task;
 use App\Models\TaskTemplate;
 use Livewire\Volt\Component;
 
@@ -28,6 +30,15 @@ new class extends Component
     public bool $showModal = false;
 
     public array $expandedTemplates = [];
+
+    // Warning modal properties
+    public int $affectedProjectsCount = 0;
+
+    public int $tasksWithProgressCount = 0;
+
+    public bool $showWarningModal = false;
+
+    public ?int $pendingEditId = null;
 
     public function mount(): void
     {
@@ -154,6 +165,26 @@ new class extends Component
 
     public function edit(int $id): void
     {
+        // Check for affected projects/tasks
+        $this->affectedProjectsCount = Project::whereHas('tasks', function ($q) use ($id) {
+            $q->where('template_task_id', $id);
+        })->count();
+
+        $this->tasksWithProgressCount = Task::where('template_task_id', $id)
+            ->whereHas('progress')
+            ->count();
+
+        // If there are affected items, show warning first
+        if ($this->affectedProjectsCount > 0 || $this->tasksWithProgressCount > 0) {
+            $this->pendingEditId = $id;
+            $this->showWarningModal = true;
+        } else {
+            $this->proceedWithEdit($id);
+        }
+    }
+
+    public function proceedWithEdit(int $id): void
+    {
         $template = TaskTemplate::findOrFail($id);
         $this->editingId = $template->id;
         $this->name = $template->name;
@@ -162,7 +193,24 @@ new class extends Component
         $this->weight = (float) $template->weight;
         $this->price = (float) $template->price;
         $this->parentId = $template->parent_id;
+        $this->showWarningModal = false;
         $this->showModal = true;
+    }
+
+    public function confirmEdit(): void
+    {
+        if ($this->pendingEditId) {
+            $this->proceedWithEdit($this->pendingEditId);
+            $this->pendingEditId = null;
+        }
+    }
+
+    public function cancelWarning(): void
+    {
+        $this->showWarningModal = false;
+        $this->pendingEditId = null;
+        $this->affectedProjectsCount = 0;
+        $this->tasksWithProgressCount = 0;
     }
 
     public function save(): void
@@ -445,5 +493,47 @@ new class extends Component
                 </flux:button>
             </div>
         </form>
+    </flux:modal>
+
+    <!-- Warning Modal for editing templates with active projects -->
+    <flux:modal wire:model="showWarningModal" class="max-w-md">
+        <div class="space-y-4">
+            <div class="flex items-center gap-3">
+                <div class="flex h-10 w-10 items-center justify-center rounded-full bg-amber-100 dark:bg-amber-900/30">
+                    <svg class="h-6 w-6 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+                    </svg>
+                </div>
+                <flux:heading size="lg">Edit Warning</flux:heading>
+            </div>
+
+            <flux:text class="text-neutral-600 dark:text-neutral-400">
+                This template has been used in existing projects. Editing will NOT automatically update tasks in those projects.
+            </flux:text>
+
+            <div class="rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-800 dark:bg-amber-900/20">
+                <ul class="space-y-1 text-sm text-amber-800 dark:text-amber-200">
+                    @if($affectedProjectsCount > 0)
+                        <li>{{ $affectedProjectsCount }} project(s) have tasks from this template</li>
+                    @endif
+                    @if($tasksWithProgressCount > 0)
+                        <li>{{ $tasksWithProgressCount }} task(s) already have progress entries</li>
+                    @endif
+                </ul>
+            </div>
+
+            <flux:text class="text-sm text-neutral-500 dark:text-neutral-400">
+                Existing task values and progress data will remain unchanged.
+            </flux:text>
+
+            <div class="flex justify-end gap-2">
+                <flux:button wire:click="cancelWarning" variant="ghost">
+                    Cancel
+                </flux:button>
+                <flux:button wire:click="confirmEdit" variant="primary">
+                    Continue Editing
+                </flux:button>
+            </div>
+        </div>
     </flux:modal>
 </div>
