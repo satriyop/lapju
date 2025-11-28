@@ -46,6 +46,7 @@ class DatabaseSeeder extends Seeder
         // Seed locations and partners
         $this->call([
             LocationSeeder::class,
+            LocationGeocodingSeeder::class,
             PartnerSeeder::class,
         ]);
 

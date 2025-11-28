@@ -2,6 +2,7 @@
 
 use App\Models\Location;
 use Livewire\Volt\Component;
+use Livewire\WithPagination;
 
 use function Livewire\Volt\layout;
 
@@ -9,6 +10,8 @@ layout('components.layouts.app');
 
 new class extends Component
 {
+    use WithPagination;
+
     public string $search = '';
 
     public ?int $editingId = null;
@@ -21,11 +24,15 @@ new class extends Component
 
     public string $notes = '';
 
+    public ?string $latitude = null;
+
+    public ?string $longitude = null;
+
     public bool $showModal = false;
 
     public function create(): void
     {
-        $this->reset(['editingId', 'villageName', 'cityName', 'provinceName', 'notes']);
+        $this->reset(['editingId', 'villageName', 'cityName', 'provinceName', 'notes', 'latitude', 'longitude']);
         $this->showModal = true;
     }
 
@@ -37,6 +44,8 @@ new class extends Component
         $this->cityName = $location->city_name;
         $this->provinceName = $location->province_name;
         $this->notes = $location->notes ?? '';
+        $this->latitude = $location->latitude;
+        $this->longitude = $location->longitude;
         $this->showModal = true;
     }
 
@@ -47,27 +56,28 @@ new class extends Component
             'cityName' => 'required|string|max:255',
             'provinceName' => 'required|string|max:255',
             'notes' => 'nullable|string',
+            'latitude' => 'nullable|numeric|between:-90,90',
+            'longitude' => 'nullable|numeric|between:-180,180',
         ]);
+
+        $data = [
+            'village_name' => $this->villageName,
+            'city_name' => $this->cityName,
+            'province_name' => $this->provinceName,
+            'notes' => $this->notes ?: null,
+            'latitude' => $this->latitude ?: null,
+            'longitude' => $this->longitude ?: null,
+        ];
 
         if ($this->editingId) {
             $location = Location::findOrFail($this->editingId);
-            $location->update([
-                'village_name' => $this->villageName,
-                'city_name' => $this->cityName,
-                'province_name' => $this->provinceName,
-                'notes' => $this->notes ?: null,
-            ]);
+            $location->update($data);
         } else {
-            Location::create([
-                'village_name' => $this->villageName,
-                'city_name' => $this->cityName,
-                'province_name' => $this->provinceName,
-                'notes' => $this->notes ?: null,
-            ]);
+            Location::create($data);
         }
 
         $this->showModal = false;
-        $this->reset(['editingId', 'villageName', 'cityName', 'provinceName', 'notes']);
+        $this->reset(['editingId', 'villageName', 'cityName', 'provinceName', 'notes', 'latitude', 'longitude']);
     }
 
     public function delete(int $id): void
@@ -80,6 +90,11 @@ new class extends Component
         }
     }
 
+    public function updatedSearch(): void
+    {
+        $this->resetPage();
+    }
+
     public function with(): array
     {
         $locations = Location::query()
@@ -90,7 +105,7 @@ new class extends Component
             ->orderBy('province_name')
             ->orderBy('city_name')
             ->orderBy('village_name')
-            ->get();
+            ->paginate(15);
 
         return [
             'locations' => $locations,
@@ -136,7 +151,7 @@ new class extends Component
                 <tr>
                     <th class="px-4 py-3 text-left text-sm font-medium text-neutral-900 dark:text-neutral-100">Village Name</th>
                     <th class="px-4 py-3 text-left text-sm font-medium text-neutral-900 dark:text-neutral-100">City / Province</th>
-                    <th class="px-4 py-3 text-left text-sm font-medium text-neutral-900 dark:text-neutral-100">Notes</th>
+                    <th class="px-4 py-3 text-left text-sm font-medium text-neutral-900 dark:text-neutral-100">Coordinates</th>
                     <th class="px-4 py-3 text-left text-sm font-medium text-neutral-900 dark:text-neutral-100">Projects</th>
                     <th class="px-4 py-3 text-right text-sm font-medium text-neutral-900 dark:text-neutral-100">Actions</th>
                 </tr>
@@ -161,11 +176,14 @@ new class extends Component
                             <div class="text-neutral-900 dark:text-neutral-100">{{ $location->city_name }}</div>
                             <div class="text-sm text-neutral-500">{{ $location->province_name }}</div>
                         </td>
-                        <td class="px-4 py-3 text-sm text-neutral-600 dark:text-neutral-400">
-                            @if($location->notes)
-                                {{ Str::limit($location->notes, 50) }}
+                        <td class="px-4 py-3 text-sm">
+                            @if($location->latitude && $location->longitude)
+                                <div class="font-mono text-xs text-neutral-600 dark:text-neutral-400">
+                                    {{ $location->latitude }}, {{ $location->longitude }}
+                                </div>
+                                <flux:badge size="sm" color="green" class="mt-1">Map ready</flux:badge>
                             @else
-                                <span class="text-neutral-400">-</span>
+                                <flux:badge size="sm" color="zinc">No coordinates</flux:badge>
                             @endif
                         </td>
                         <td class="px-4 py-3">
@@ -203,6 +221,11 @@ new class extends Component
         </table>
     </div>
 
+    <!-- Pagination -->
+    <div class="mt-4">
+        {{ $locations->links() }}
+    </div>
+
     <!-- Summary -->
     <div class="rounded-xl border border-neutral-200 bg-white p-6 dark:border-neutral-700 dark:bg-neutral-900">
         <flux:heading size="lg" class="mb-4">Summary</flux:heading>
@@ -210,13 +233,13 @@ new class extends Component
             <div class="rounded-lg bg-neutral-50 p-4 dark:bg-neutral-800">
                 <div class="text-sm font-medium text-neutral-600 dark:text-neutral-400">Total Locations</div>
                 <div class="mt-1 text-2xl font-bold text-neutral-900 dark:text-neutral-100">
-                    {{ $locations->count() }}
+                    {{ $locations->total() }}
                 </div>
             </div>
             <div class="rounded-lg bg-neutral-50 p-4 dark:bg-neutral-800">
-                <div class="text-sm font-medium text-neutral-600 dark:text-neutral-400">Provinces Covered</div>
+                <div class="text-sm font-medium text-neutral-600 dark:text-neutral-400">On This Page</div>
                 <div class="mt-1 text-2xl font-bold text-blue-600 dark:text-blue-400">
-                    {{ $locations->pluck('province_name')->unique()->count() }}
+                    {{ $locations->count() }}
                 </div>
             </div>
             <div class="rounded-lg bg-neutral-50 p-4 dark:bg-neutral-800">
@@ -265,6 +288,28 @@ new class extends Component
                 placeholder="Additional information about this location..."
                 rows="3"
             />
+
+            <div class="grid grid-cols-2 gap-4">
+                <flux:input
+                    wire:model="latitude"
+                    label="Latitude"
+                    type="number"
+                    step="0.00000001"
+                    placeholder="e.g., -7.5654"
+                />
+
+                <flux:input
+                    wire:model="longitude"
+                    label="Longitude"
+                    type="number"
+                    step="0.00000001"
+                    placeholder="e.g., 110.8243"
+                />
+            </div>
+
+            <p class="text-xs text-neutral-500 dark:text-neutral-400">
+                Coordinates are required to display this location on the Project Map. You can find coordinates using Google Maps.
+            </p>
 
             <div class="flex justify-end gap-3">
                 <flux:button wire:click="$set('showModal', false)" variant="outline">

@@ -84,6 +84,12 @@ new class extends Component
         $this->createOfficeId = null;
     }
 
+    public function updatedSearch(): void
+    {
+        // Expand all offices when searching to make results visible
+        $this->dispatch('expand-all-offices');
+    }
+
     public function openCreateModal(): void
     {
         $this->reset([
@@ -796,7 +802,8 @@ new class extends Component
              traverse(@js($officeHierarchy));
              return ids;
          }
-     }">
+     }"
+     @expand-all-offices.window="expandedOffices = ['all']">
     <div class="flex items-center justify-between">
         <div>
             <flux:heading size="xl">User Management</flux:heading>
@@ -818,20 +825,22 @@ new class extends Component
     </div>
 
     <!-- Filters -->
-    <div class="flex flex-col gap-4 sm:flex-row sm:items-center">
-        <div class="flex-1">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div class="flex-1 sm:max-w-md">
             <flux:input
                 wire:model.live.debounce.300ms="search"
                 type="search"
                 placeholder="Search by name, phone, or NRP..."
             />
         </div>
-        <flux:select wire:model.live="filter">
-            <option value="all">All Users</option>
-            <option value="pending">Pending Approval</option>
-            <option value="approved">Approved</option>
-            <option value="admin">Admins</option>
-        </flux:select>
+        <div class="sm:w-48">
+            <flux:select wire:model.live="filter">
+                <option value="all">All Users</option>
+                <option value="pending">Pending Approval</option>
+                <option value="approved">Approved</option>
+                <option value="admin">Admins</option>
+            </flux:select>
+        </div>
     </div>
 
     <!-- Users Table -->

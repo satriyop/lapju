@@ -8,6 +8,7 @@ use App\Models\TaskTemplate;
 use App\Observers\ProjectObserver;
 use App\Observers\TaskProgressObserver;
 use App\Observers\TaskTemplateObserver;
+use Carbon\Carbon;
 use Illuminate\Support\ServiceProvider;
 
 class AppServiceProvider extends ServiceProvider
@@ -25,6 +26,9 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
+        // Set Carbon locale to Indonesian for date/time formatting
+        Carbon::setLocale(config('app.locale'));
+
         // Automatically clone task templates when a project is created
         Project::observe(ProjectObserver::class);
 

@@ -15,7 +15,17 @@ class Location extends Model
         'district_name',
         'province_name',
         'notes',
+        'latitude',
+        'longitude',
     ];
+
+    protected function casts(): array
+    {
+        return [
+            'latitude' => 'decimal:8',
+            'longitude' => 'decimal:8',
+        ];
+    }
 
     public function projects(): \Illuminate\Database\Eloquent\Relations\HasMany
     {

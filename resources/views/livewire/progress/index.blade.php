@@ -662,7 +662,7 @@ new class extends Component
     <div class="sticky top-0 z-10 border-b border-neutral-200 bg-white px-4 py-3 dark:border-neutral-700 dark:bg-neutral-900">
         <div class="flex items-center justify-between">
             <div class="flex-1">
-                <h1 class="text-lg font-bold text-neutral-900 dark:text-neutral-100">Progress Tracking</h1>
+                <h1 class="text-lg font-bold text-neutral-900 dark:text-neutral-100">{{ __('Progress Tracking') }}</h1>
                 <p class="text-xs text-neutral-600 dark:text-neutral-400">{{ now()->format('D, M j, Y') }}</p>
             </div>
         </div>
@@ -670,9 +670,9 @@ new class extends Component
         <!-- Project Selector and Date Picker -->
         <div class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div>
-                <label class="mb-1 block text-xs font-medium text-neutral-700 dark:text-neutral-300">Project</label>
+                <label class="mb-1 block text-xs font-medium text-neutral-700 dark:text-neutral-300">{{ __('Project') }}</label>
                 <flux:select wire:model.live="selectedProjectId" class="w-full">
-                    <option value="">Select Project...</option>
+                    <option value="">{{ __('Select Project...') }}</option>
                     @foreach($projects as $project)
                         <option value="{{ $project->id }}">
                             {{ $project->name }} - {{ Str::limit($project->partner->name, 30) }}
@@ -682,11 +682,11 @@ new class extends Component
             </div>
             <div>
                 <label class="mb-1 block text-xs font-medium text-neutral-700 dark:text-neutral-300">
-                    Progress Date
+                    {{ __('Progress Date') }}
                     @if($selectedProject && $selectedProject->start_date && $selectedProject->end_date)
                         <span class="text-neutral-500">({{ \Carbon\Carbon::parse($selectedProject->start_date)->format('M d, Y') }} - {{ \Carbon\Carbon::parse($selectedProject->end_date)->format('M d, Y') }})</span>
                     @else
-                        <span class="text-neutral-500">(no future dates)</span>
+                        <span class="text-neutral-500">({{ __('no future dates') }})</span>
                     @endif
                 </label>
                 @php
@@ -724,7 +724,7 @@ new class extends Component
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
                     </svg>
                     <span>
-                        Entering progress for:
+                        {{ __('Entering progress for:') }}
                         <strong>{{ \Carbon\Carbon::parse($selectedDate)->format('D, M j, Y') }}</strong>
                         ({{ \Carbon\Carbon::parse($selectedDate)->diffForHumans() }})
                     </span>
@@ -896,7 +896,7 @@ new class extends Component
                                             @if($latestProgress)
                                                 <div class="mt-3 rounded-lg border border-blue-200 bg-blue-50 p-2 dark:border-blue-800 dark:bg-blue-900/30">
                                                     <div class="flex items-center justify-between text-sm">
-                                                        <span class="font-medium text-blue-800 dark:text-blue-200">Latest Progress:</span>
+                                                        <span class="font-medium text-blue-800 dark:text-blue-200">{{ __('Latest Progress:') }}</span>
                                                         <span class="font-bold
                                                             @if($latestProgress['percentage'] >= 100) text-green-600 dark:text-green-400
                                                             @elseif($latestProgress['percentage'] >= 75) text-blue-600 dark:text-blue-400
@@ -918,7 +918,7 @@ new class extends Component
                                                         ></div>
                                                     </div>
                                                     <div class="mt-1 text-xs text-blue-700 dark:text-blue-300">
-                                                        Updated: {{ $latestProgress['progress_date']->format('M d, Y') }}
+                                                        {{ __('Updated:') }} {{ $latestProgress['progress_date']->format('M d, Y') }}
                                                         @if($latestProgress['notes'])
                                                             <br>{{ $latestProgress['notes'] }}
                                                         @endif
@@ -926,7 +926,7 @@ new class extends Component
                                                 </div>
                                             @else
                                                 <div class="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-200">
-                                                    No progress recorded yet for this task
+                                                    {{ __('No progress recorded yet for this task') }}
                                                 </div>
                                             @endif
 
@@ -934,7 +934,7 @@ new class extends Component
                                                 <!-- Percentage Input -->
                                                 <div class="flex items-center gap-2">
                                                     <label class="w-16 text-sm font-medium text-neutral-700 dark:text-neutral-300">
-                                                        Progress
+                                                        {{ __('Progress') }}
                                                     </label>
                                                     <div class="flex flex-1 items-center gap-2">
                                                         <flux:input
@@ -953,12 +953,12 @@ new class extends Component
                                                 <!-- Notes Input -->
                                                 <div class="flex items-start gap-2">
                                                     <label class="w-16 pt-2 text-sm font-medium text-neutral-700 dark:text-neutral-300">
-                                                        Notes
+                                                        {{ __('Notes') }}
                                                     </label>
                                                     <flux:input
                                                         wire:model="progressData.{{ $task->id }}.notes"
                                                         type="text"
-                                                        placeholder="Optional notes..."
+                                                        :placeholder="__('Optional notes...')"
                                                         class="flex-1"
                                                     />
                                                 </div>
@@ -969,13 +969,13 @@ new class extends Component
                                                     variant="primary"
                                                     class="w-full"
                                                 >
-                                                    Save Progress
+                                                    {{ __('Save Progress') }}
                                                 </flux:button>
                                             </div>
                                         @else
                                             <!-- Parent Task Indicator -->
                                             <div class="mt-2 text-xs italic text-neutral-500 dark:text-neutral-400">
-                                                Parent task ({{ $parentProgress['task_count'] ?? 0 }} leaf tasks) - expand to track child tasks
+                                                {{ __('Parent task') }} ({{ $parentProgress['task_count'] ?? 0 }} {{ __('leaf tasks') }}) - {{ __('expand to track child tasks') }}
                                             </div>
                                         @endif
                                     </div>
@@ -987,7 +987,7 @@ new class extends Component
                         <div class="mt-4 rounded-xl border border-neutral-300 bg-white p-4 shadow-sm dark:border-neutral-600 dark:bg-neutral-800">
                             <div class="mb-3 flex items-center justify-between">
                                 <h3 class="font-semibold text-neutral-900 dark:text-neutral-100">
-                                    Progress Photo
+                                    {{ __('Progress Photo') }}
                                 </h3>
                                 <svg class="h-5 w-5 text-neutral-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"></path>
@@ -1008,10 +1008,10 @@ new class extends Component
                                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
                                     </svg>
                                     <p class="mt-2 text-sm font-medium text-yellow-800 dark:text-yellow-300">
-                                        Progress Required
+                                        {{ __('Progress Required') }}
                                     </p>
                                     <p class="mt-1 text-xs text-yellow-700 dark:text-yellow-400">
-                                        Please enter progress for this task's child tasks before uploading a photo.
+                                        {{ __('Please enter progress for this task\'s child tasks before uploading a photo.') }}
                                     </p>
                                 </div>
                             @else
@@ -1036,16 +1036,16 @@ new class extends Component
 
                                     <div class="flex items-center justify-between text-xs text-neutral-600 dark:text-neutral-400">
                                         <span>
-                                            Uploaded: {{ \Carbon\Carbon::parse($existingPhoto['created_at'])->format('M d, Y g:i A') }}
+                                            {{ __('Uploaded:') }} {{ \Carbon\Carbon::parse($existingPhoto['created_at'])->format('M d, Y g:i A') }}
                                         </span>
                                         @if(\Carbon\Carbon::parse($existingPhoto['created_at'])->isToday() && $existingPhoto['user_id'] === auth()->id())
                                             <flux:button
                                                 wire:click="deletePhoto({{ $existingPhoto['id'] }})"
-                                                wire:confirm="Delete this photo?"
+                                                wire:confirm="{{ __('Delete this photo?') }}"
                                                 size="sm"
                                                 variant="danger"
                                             >
-                                                Delete
+                                                {{ __('Delete') }}
                                             </flux:button>
                                         @endif
                                     </div>
@@ -1097,7 +1097,7 @@ new class extends Component
                                     <flux:input
                                         wire:model="photoCaptions.{{ $rootTask->id }}"
                                         type="text"
-                                        placeholder="Add a caption (optional)..."
+                                        :placeholder="__('Add a caption (optional)...')"
                                         class="w-full"
                                     />
 
@@ -1109,8 +1109,8 @@ new class extends Component
                                         wire:loading.attr="disabled"
                                         wire:target="uploadPhoto"
                                     >
-                                        <span wire:loading.remove wire:target="uploadPhoto">Upload Photo</span>
-                                        <span wire:loading wire:target="uploadPhoto">Uploading...</span>
+                                        <span wire:loading.remove wire:target="uploadPhoto">{{ __('Upload Photo') }}</span>
+                                        <span wire:loading wire:target="uploadPhoto">{{ __('Uploading...') }}</span>
                                     </flux:button>
 
                                     @error("photos.{$rootTask->id}")
@@ -1129,13 +1129,13 @@ new class extends Component
                                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"></path>
                                             </svg>
                                             <p class="mt-2 text-sm font-medium text-neutral-700 dark:text-neutral-300">
-                                                Tap to add photo
+                                                {{ __('Tap to add photo') }}
                                             </p>
                                             <p class="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
-                                                PNG, JPG, WEBP up to 2MB
+                                                {{ __('PNG, JPG, WEBP up to 2MB') }}
                                             </p>
                                             <p class="mt-1 text-xs text-neutral-400 dark:text-neutral-500">
-                                                Large photos will be compressed automatically
+                                                {{ __('Large photos will be compressed automatically') }}
                                             </p>
                                         </div>
                                     </label>
@@ -1156,7 +1156,7 @@ new class extends Component
                                     />
                                     <div id="upload-status-{{ $rootTask->id }}" class="mt-2 text-sm"></div>
                                     <div wire:loading wire:target="photos.{{ $rootTask->id }}" class="mt-2 text-sm text-blue-600">
-                                        Uploading...
+                                        {{ __('Uploading...') }}
                                     </div>
                                 </div>
                             @endif
@@ -1174,10 +1174,10 @@ new class extends Component
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
                 </svg>
                 <h3 class="mt-4 text-lg font-medium text-neutral-900 dark:text-neutral-100">
-                    No Project Selected
+                    {{ __('No Project Selected') }}
                 </h3>
                 <p class="mt-2 text-sm text-neutral-600 dark:text-neutral-400">
-                    Please select a project to start tracking progress
+                    {{ __('Please select a project to start tracking progress') }}
                 </p>
             </div>
         </div>

@@ -56,6 +56,8 @@ new class extends Component
 
     private $cachedBatchProgress = null;
 
+    private $cachedProjectProgress = null;
+
     public function mount(): void
     {
         $currentUser = auth()->user();
@@ -241,7 +243,7 @@ new class extends Component
 
     public function getFilteredProjects()
     {
-        $query = Project::with('location', 'partner', 'office');
+        $query = Project::with('location', 'partner', 'office.parent');
 
         // Reporters can only see their assigned projects
         if (auth()->user()->hasRole('Reporter')) {
@@ -397,8 +399,9 @@ new class extends Component
     private $cachedAllProgress = null;
 
     /**
-     * Load ALL progress records for filtered projects (for S-curve historical lookups)
+     * Load progress records for filtered projects within relevant date range (for S-curve historical lookups)
      * This enables in-memory filtering by date instead of per-date queries
+     * OPTIMIZED: Only loads progress within organization date range to reduce memory usage
      */
     private function loadAllProgressData(array $projectIds): array
     {
@@ -412,8 +415,14 @@ new class extends Component
             return [];
         }
 
-        // Load all progress records grouped by project_id, task_id, progress_date
+        // Only load progress within the organization's date range (not ALL history)
+        $settings = $this->getCachedSettings();
+        $startDate = $settings['start_date'];
+        $endDate = $settings['end_date'];
+
+        // Load progress records within date range, grouped by project_id, task_id, progress_date
         $allProgress = TaskProgress::whereIn('project_id', $projectIds)
+            ->whereBetween('progress_date', [$startDate, $endDate])
             ->select('task_id', 'project_id', 'percentage', 'progress_date')
             ->orderBy('progress_date', 'desc')
             ->get();
@@ -458,12 +467,15 @@ new class extends Component
     /**
      * Pre-load all tasks for a project with full parent hierarchy
      * This eliminates N+1 queries when traversing task parents
+     * OPTIMIZED: Load all tasks once, then traverse in memory (no duplicate parent loading)
      */
     private function preloadProjectTasks($projectId)
     {
         if (! isset($this->preloadedTasks[$projectId])) {
+            // Load ALL tasks once without eager loading parents (to avoid duplicates)
+            // Then we can traverse parent_id in memory using the keyed array
             $this->preloadedTasks[$projectId] = Task::where('project_id', $projectId)
-                ->with('parent.parent.parent.parent.parent')
+                ->select('id', 'project_id', 'parent_id', 'name', 'weight', '_lft')
                 ->get()
                 ->keyBy('id');
         }
@@ -502,6 +514,25 @@ new class extends Component
     }
 
     /**
+     * Get cached TaskProgress for selected project
+     * OPTIMIZED: Load once and reuse for both hierarchical view and task breakdown
+     */
+    private function getCachedProjectProgress()
+    {
+        if ($this->cachedProjectProgress === null && $this->selectedProjectId && $this->startDate && $this->endDate) {
+            $this->cachedProjectProgress = TaskProgress::where('project_id', $this->selectedProjectId)
+                ->whereBetween('progress_date', [$this->startDate, $this->endDate])
+                ->select('id', 'task_id', 'project_id', 'percentage', 'progress_date', 'notes')
+                ->with(['task' => function ($query) {
+                    $query->select('id', 'project_id', 'parent_id', 'name', 'weight');
+                }])
+                ->get();
+        }
+
+        return $this->cachedProjectProgress ?? collect();
+    }
+
+    /**
      * Batch load all leaf tasks for multiple projects in ONE query
      * Eliminates N queries for N projects
      */
@@ -524,7 +555,10 @@ new class extends Component
 
     public function getFilteredLocations()
     {
-        $query = Location::query();
+        // OPTIMIZED: Only select columns needed for the dropdown to reduce memory usage
+        // OPTIMIZED: Only load locations that are actually used by projects (not all 1,561!)
+        $query = Location::select('id', 'village_name', 'district_name', 'city_name')
+            ->whereIn('id', Project::pluck('location_id')->unique());
 
         // Reporters can only see locations from their assigned projects
         if (auth()->user()->hasRole('Reporter')) {
@@ -540,7 +574,9 @@ new class extends Component
             $userOffice = Office::with('level')->find($currentUser->office_id);
             if ($userOffice && $userOffice->level->level === 3) {
                 // Get all Koramils under this Kodim
-                $koramils = Office::where('parent_id', $currentUser->office_id)->get();
+                $koramils = Office::select('id', 'coverage_district', 'coverage_city')
+                    ->where('parent_id', $currentUser->office_id)
+                    ->get();
 
                 // Collect all coverage areas
                 $districts = $koramils->pluck('coverage_district')->filter();
@@ -948,6 +984,7 @@ new class extends Component
                     'location_village' => $project->location->village_name ?? '-',
                     'location_district' => $project->location->district_name ?? '-',
                     'office_name' => $project->office->name ?? null,
+                    'kodim_name' => $project->office?->parent?->name ?? null,
                 ];
             }
         }
@@ -1238,13 +1275,20 @@ new class extends Component
             return [];
         }
 
-        // Get daily progress data
-        $dailyData = TaskProgress::where('project_id', $this->selectedProjectId)
-            ->whereBetween('progress_date', [$this->startDate, $this->endDate])
-            ->select('progress_date', DB::raw('AVG(percentage) as avg_percentage'), DB::raw('COUNT(DISTINCT task_id) as task_count'))
-            ->groupBy('progress_date')
-            ->orderBy('progress_date')
-            ->get();
+        // OPTIMIZED: Use cached project progress data instead of separate query
+        $allProgressData = $this->getCachedProjectProgress();
+
+        // Group by date and calculate daily aggregates in memory
+        $dailyData = $allProgressData->groupBy('progress_date')
+            ->map(function ($dayProgress, $date) {
+                return (object) [
+                    'progress_date' => $date,
+                    'avg_percentage' => $dayProgress->avg('percentage'),
+                    'task_count' => $dayProgress->unique('task_id')->count(),
+                ];
+            })
+            ->sortBy('progress_date')
+            ->values();
 
         $hierarchical = [];
 
@@ -1325,9 +1369,13 @@ new class extends Component
         $projectIds = $projects->pluck('id')->toArray();
 
         // PRE-LOAD ALL CACHES ONCE to eliminate N+1 queries
-        $this->batchLoadAllLeafTasks($projectIds);
-        $this->getCachedBatchProgress();
-        $this->loadAllProgressData($projectIds); // For S-curve historical lookups
+        // OPTIMIZED: Only batch load when viewing ALL projects (aggregated view)
+        // When a specific project is selected, we use getCachedProjectProgress() instead
+        if (! $this->selectedProjectId) {
+            $this->batchLoadAllLeafTasks($projectIds);
+            $this->getCachedBatchProgress();
+            $this->loadAllProgressData($projectIds); // For S-curve historical lookups
+        }
 
         $locations = $this->getFilteredLocations();
 
@@ -1339,16 +1387,17 @@ new class extends Component
         $koramilLevel = $levels->koramil;
 
         // Cascading office filters
-        $kodams = $kodamLevel ? Office::where('level_id', $kodamLevel->id)->orderBy('name')->get() : collect();
+        // OPTIMIZED: Only select columns needed for dropdowns to reduce memory usage
+        $kodams = $kodamLevel ? Office::select('id', 'name')->where('level_id', $kodamLevel->id)->orderBy('name')->get() : collect();
 
         $korems = $koremLevel && $this->selectedKodamId
-            ? Office::where('level_id', $koremLevel->id)->where('parent_id', $this->selectedKodamId)->orderBy('name')->get()
+            ? Office::select('id', 'name')->where('level_id', $koremLevel->id)->where('parent_id', $this->selectedKodamId)->orderBy('name')->get()
             : collect();
 
         $kodims = $kodimLevel && $this->selectedKoremId
             ? Office::where('level_id', $kodimLevel->id)
                 ->where('parent_id', $this->selectedKoremId)
-                ->selectRaw('offices.*, (
+                ->selectRaw('offices.id, offices.name, (
                     SELECT COUNT(*) FROM projects
                     WHERE projects.office_id IN (
                         SELECT id FROM offices AS koramils WHERE koramils.parent_id = offices.id
@@ -1359,7 +1408,8 @@ new class extends Component
             : collect();
 
         $koramils = $koramilLevel && $this->selectedKodimId
-            ? Office::where('level_id', $koramilLevel->id)
+            ? Office::select('id', 'name')
+                ->where('level_id', $koramilLevel->id)
                 ->where('parent_id', $this->selectedKodimId)
                 ->withCount('projects')
                 ->orderBy('name')
@@ -1455,10 +1505,8 @@ new class extends Component
         }
 
         // Get all tasks with their latest progress in the date range
-        $taskProgress = TaskProgress::where('project_id', $this->selectedProjectId)
-            ->whereBetween('progress_date', [$this->startDate, $this->endDate])
-            ->with('task')
-            ->get()
+        // OPTIMIZED: Use cached project progress data (same data as hierarchical view)
+        $taskProgress = $this->getCachedProjectProgress()
             ->groupBy('task_id')
             ->map(function ($progressEntries) {
                 // Get the latest entry for each task
@@ -2129,11 +2177,19 @@ new class extends Component
                                             <h4 class="font-semibold text-neutral-900 dark:text-neutral-100">
                                                 {{ $projectData['name'] }}
                                             </h4>
-                                            <div class="mt-1 text-sm text-neutral-600 dark:text-neutral-400">
-                                                <span>{{ $projectData['location_village'] }}, {{ $projectData['location_district'] }}</span>
+                                            <div class="mt-1 flex flex-wrap items-center gap-2">
+                                                <span class="text-sm text-neutral-600 dark:text-neutral-400">
+                                                    {{ $projectData['location_village'] }}, {{ $projectData['location_district'] }}
+                                                </span>
+                                                @if($projectData['kodim_name'])
+                                                    <flux:badge size="sm" color="blue" class="font-medium">
+                                                        {{ $projectData['kodim_name'] }}
+                                                    </flux:badge>
+                                                @endif
                                                 @if($projectData['office_name'])
-                                                    <span class="mx-1">•</span>
-                                                    <span>{{ $projectData['office_name'] }}</span>
+                                                    <flux:badge size="sm" color="green" class="font-medium">                                                
+                                                        {{ $projectData['office_name'] }}
+                                                    </flux:badge>
                                                 @endif
                                             </div>
                                         </div>

@@ -448,16 +448,16 @@ new class extends Component
 
 <div class="flex h-full w-full flex-1 flex-col gap-4">
     <div class="flex items-center justify-between">
-        <flux:heading size="xl">Projects</flux:heading>
+        <flux:heading size="xl">{{ __('Projects') }}</flux:heading>
         <flux:button wire:click="create" variant="primary">
-            Create Project
+            {{ __('Create Project') }}
         </flux:button>
     </div>
 
     <div class="w-full max-w-md">
         <flux:input
             wire:model.live.debounce.300ms="search"
-            placeholder="Search projects..."
+            :placeholder="__('Search projects...')"
             type="search"
         />
     </div>
@@ -466,19 +466,19 @@ new class extends Component
         <table class="w-full">
             <thead class="border-b border-neutral-200 bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800">
                 <tr>
-                    <th class="px-4 py-3 text-left text-sm font-semibold">Name</th>
-                    <th class="px-4 py-3 text-left text-sm font-semibold">Partner</th>
-                    <th class="px-4 py-3 text-left text-sm font-semibold">Office</th>
-                    <th class="px-4 py-3 text-left text-sm font-semibold">Location</th>
-                    <th class="px-4 py-3 text-left text-sm font-semibold">Status</th>
-                    <th class="px-4 py-3 text-left text-sm font-semibold">Start Date</th>
-                    <th class="px-4 py-3 text-left text-sm font-semibold">End Date</th>
-                    <th class="px-4 py-3 text-left text-sm font-semibold">Assigned Users</th>
+                    <th class="px-4 py-3 text-left text-sm font-semibold">{{ __('Name') }}</th>
+                    <th class="px-4 py-3 text-left text-sm font-semibold">{{ __('Partner') }}</th>
+                    <th class="px-4 py-3 text-left text-sm font-semibold">{{ __('Office') }}</th>
+                    <th class="px-4 py-3 text-left text-sm font-semibold">{{ __('Location') }}</th>
+                    <th class="px-4 py-3 text-left text-sm font-semibold">{{ __('Status') }}</th>
+                    <th class="px-4 py-3 text-left text-sm font-semibold">{{ __('Start Date') }}</th>
+                    <th class="px-4 py-3 text-left text-sm font-semibold">{{ __('End Date') }}</th>
+                    <th class="px-4 py-3 text-left text-sm font-semibold">{{ __('Assigned Users') }}</th>
                     <th class="px-4 py-3 text-right text-sm font-semibold">
                         @if($this->isReporter())
-                            Actual progress %
+                            {{ __('Actual progress %') }}
                         @else
-                            Actions
+                            {{ __('Actions') }}
                         @endif
                     </th>
                 </tr>
@@ -525,23 +525,23 @@ new class extends Component
                                     @endforeach
                                 </div>
                             @else
-                                <span class="text-neutral-400 dark:text-neutral-500">None</span>
+                                <span class="text-neutral-400 dark:text-neutral-500">{{ __('None') }}</span>
                             @endif
                         </td>
                         <td class="px-4 py-3 text-right text-sm">
                             @if($this->canManageProject($project))
                                 <div class="flex items-center justify-end gap-2">
                                     <flux:button wire:click="edit({{ $project->id }})" size="sm" variant="ghost">
-                                        Edit
+                                        {{ __('Edit') }}
                                     </flux:button>
                                     <flux:button
                                         wire:click="delete({{ $project->id }})"
-                                        wire:confirm="Are you sure you want to delete this project?"
+                                        wire:confirm="{{ __('Are you sure you want to delete this project?') }}"
                                         size="sm"
                                         variant="ghost"
                                         class="text-red-600 hover:text-red-700"
                                     >
-                                        Delete
+                                        {{ __('Delete') }}
                                     </flux:button>
                                 </div>
                             @elseif($this->isReporter())
@@ -562,7 +562,7 @@ new class extends Component
                 @empty
                     <tr>
                         <td colspan="9" class="px-4 py-8 text-center text-sm text-neutral-500">
-                            No projects found.
+                            {{ __('No projects found.') }}
                         </td>
                     </tr>
                 @endforelse
@@ -576,10 +576,10 @@ new class extends Component
 
     <flux:modal wire:model="showModal" class="min-w-[600px]">
         <form wire:submit="save" class="space-y-6">
-            <flux:heading size="lg">{{ $editingId ? 'Edit Project' : 'Create Project' }}</flux:heading>
+            <flux:heading size="lg">{{ $editingId ? __('Edit Project') : __('Create Project') }}</flux:heading>
 
-            <flux:select wire:model="partnerId" label="Partner" required>
-                <option value="">Select partner...</option>
+            <flux:select wire:model="partnerId" :label="__('Partner')" required>
+                <option value="">{{ __('Select partner...') }}</option>
                 @foreach($partners as $partner)
                     <option value="{{ $partner->id }}">{{ $partner->name }}</option>
                 @endforeach
@@ -589,7 +589,7 @@ new class extends Component
                 {{-- Read-only office fields for reporters and Koramil Admins --}}
                 <div class="grid grid-cols-2 gap-4">
                     <flux:input
-                        label="Kodim"
+                        :label="__('Kodim')"
                         type="text"
                         :value="$kodims->firstWhere('id', $kodimId)?->name ?? ''"
                         readonly
@@ -597,7 +597,7 @@ new class extends Component
                     />
 
                     <flux:input
-                        label="Koramil"
+                        :label="__('Koramil')"
                         type="text"
                         :value="$koramils->firstWhere('id', $koramilId)?->name ?? ''"
                         readonly
@@ -607,8 +607,8 @@ new class extends Component
             @else
                 {{-- Editable office fields for Managers and Admins --}}
                 <div class="grid grid-cols-2 gap-4">
-                    <flux:select wire:model.live="kodimId" label="Kodim" required>
-                        <option value="">Select Kodim...</option>
+                    <flux:select wire:model.live="kodimId" :label="__('Kodim')" required>
+                        <option value="">{{ __('Select Kodim...') }}</option>
                         @foreach($kodims as $kodim)
                             <option value="{{ $kodim->id }}">{{ $kodim->name }}</option>
                         @endforeach
@@ -617,9 +617,9 @@ new class extends Component
                     <flux:select
                         wire:model.live="koramilId"
                         wire:key="koramil-select-{{ $editingId ?? 'new' }}"
-                        label="Koramil"
+                        :label="__('Koramil')"
                         required>
-                        <option value="">Select Koramil...</option>
+                        <option value="">{{ __('Select Koramil...') }}</option>
                         @foreach(($editingId && $availableKoramils->isNotEmpty()) ? $availableKoramils : $koramils as $koramil)
                             <option value="{{ $koramil->id }}">{{ $koramil->name }}</option>
                         @endforeach
@@ -630,9 +630,9 @@ new class extends Component
             <flux:select
                 wire:model.live="locationId"
                 wire:key="location-select-{{ $editingId ?? 'new' }}"
-                label="Location"
+                :label="__('Location')"
                 required>
-                <option value="">Select location...</option>
+                <option value="">{{ __('Select location...') }}</option>
                 @foreach(($editingId && $availableLocations->isNotEmpty()) ? $availableLocations : $locations as $location)
                     <option value="{{ $location->id }}">
                         {{ $location->village_name }} - {{ $location->district_name }}
@@ -647,26 +647,26 @@ new class extends Component
                 @endphp
                 <flux:input
                     wire:model="startDate"
-                    label="Project Start Date"
+                    :label="__('Project Start Date')"
                     type="date"
                     min="{{ $minStartDate }}"
                     required
                 />
                 <p class="mt-1 text-xs text-neutral-600 dark:text-neutral-400">
-                    Minimum allowed date: {{ \Carbon\Carbon::parse($minStartDate)->format('M d, Y') }}
+                    {{ __('Minimum allowed date:') }} {{ \Carbon\Carbon::parse($minStartDate)->format('M d, Y') }}
                 </p>
             @else
                 {{-- Non-reporter: Both dates editable --}}
                 <div class="grid grid-cols-2 gap-4">
                     <flux:input
                         wire:model="startDate"
-                        label="Start Date"
+                        :label="__('Start Date')"
                         type="date"
                     />
 
                     <flux:input
                         wire:model="endDate"
-                        label="End Date"
+                        :label="__('End Date')"
                         type="date"
                     />
                 </div>
@@ -674,30 +674,30 @@ new class extends Component
 
             <flux:input
                 wire:model="name"
-                label="Project Name"
+                :label="__('Project Name')"
                 type="text"
                 required
             />
 
             <flux:textarea
                 wire:model="description"
-                label="Description"
+                :label="__('Description')"
                 rows="3"
             />
 
-            <flux:select wire:model="status" label="Status" required>
-                <option value="planning">Planning</option>
-                <option value="active">Active</option>
-                <option value="completed">Completed</option>
-                <option value="on_hold">On Hold</option>
+            <flux:select wire:model="status" :label="__('Status')" required>
+                <option value="planning">{{ __('Planning') }}</option>
+                <option value="active">{{ __('Active') }}</option>
+                <option value="completed">{{ __('Completed') }}</option>
+                <option value="on_hold">{{ __('On Hold') }}</option>
             </flux:select>
 
             <div class="flex items-center justify-end gap-3">
                 <flux:button type="button" wire:click="cancelEdit" variant="ghost">
-                    Cancel
+                    {{ __('Cancel') }}
                 </flux:button>
                 <flux:button type="submit" variant="primary">
-                    {{ $editingId ? 'Update' : 'Create' }}
+                    {{ $editingId ? __('Update') : __('Create') }}
                 </flux:button>
             </div>
         </form>
