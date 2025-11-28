@@ -3,6 +3,7 @@
 use App\Models\Project;
 use App\Models\Task;
 use App\Models\TaskTemplate;
+use Illuminate\Support\Facades\Cache;
 use Livewire\Volt\Component;
 
 use function Livewire\Volt\layout;
@@ -77,32 +78,47 @@ new class extends Component
             })
             ->orderBy('_lft')
             ->get()
-            ->map(function ($template) {
-                // Calculate depth for indentation
-                $depth = 0;
-                $current = $template;
-                while ($current->parent_id) {
-                    $depth++;
-                    $current = TaskTemplate::find($current->parent_id);
-                    if (! $current) {
-                        break;
-                    }
+            ->keyBy('id'); // Index by ID for O(1) lookup
+
+        // Calculate depth in memory using parent lookup map
+        foreach ($parentTemplates as $template) {
+            $depth = 0;
+            $currentId = $template->parent_id;
+
+            // Traverse ancestors using in-memory lookup instead of database queries
+            while ($currentId && isset($parentTemplates[$currentId])) {
+                $depth++;
+                $currentId = $parentTemplates[$currentId]->parent_id;
+
+                // Prevent infinite loops
+                if ($depth > 100) {
+                    break;
                 }
-                $template->depth = $depth;
-                $template->indented_name = str_repeat('— ', $depth).$template->name;
+            }
 
-                return $template;
-            });
+            $template->depth = $depth;
+            $template->indented_name = str_repeat('— ', $depth).$template->name;
+        }
 
-        // Get statistics
-        $totalPrice = TaskTemplate::all()->sum(function ($template) {
-            return $template->price * $template->volume;
+        // Get statistics using single optimized query with caching
+        $stats = Cache::remember('task_template_stats', 3600, function () {
+            return \Illuminate\Support\Facades\DB::table('task_templates')
+                ->selectRaw('
+                    SUM(price * volume) as total_price,
+                    SUM(weight) as total_weight,
+                    COUNT(CASE WHEN NOT EXISTS (
+                        SELECT 1 FROM task_templates children
+                        WHERE children.parent_id = task_templates.id
+                    ) THEN 1 END) as total_leaf_tasks,
+                    COUNT(CASE WHEN volume > 0 OR price > 0 THEN 1 END) as templates_with_data
+                ')
+                ->first();
         });
-        $totalWeight = TaskTemplate::sum('weight');
-        $totalLeafTasks = TaskTemplate::whereDoesntHave('children')->count();
-        $templatesWithData = TaskTemplate::where(function ($q) {
-            $q->where('volume', '>', 0)->orWhere('price', '>', 0);
-        })->count();
+
+        $totalPrice = $stats->total_price ?? 0;
+        $totalWeight = $stats->total_weight ?? 0;
+        $totalLeafTasks = $stats->total_leaf_tasks ?? 0;
+        $templatesWithData = $stats->templates_with_data ?? 0;
 
         $allTemplates = TaskTemplate::query()
             ->with(['parent:id,name', 'children:id,parent_id'])
@@ -110,21 +126,26 @@ new class extends Component
             ->orderBy('_lft')
             ->get();
 
+        // Build lookup map for O(1) access
+        $templatesById = $allTemplates->keyBy('id');
+
         // Calculate depth and visibility for each template
         $visibleTemplates = collect();
         foreach ($allTemplates as $template) {
             $depth = 0;
-            $current = $template;
             $parentChain = [];
+            $currentId = $template->parent_id;
 
-            while ($current->parent_id) {
+            // Traverse ancestors using in-memory lookup instead of database queries
+            while ($currentId && isset($templatesById[$currentId])) {
                 $depth++;
-                $parent = TaskTemplate::find($current->parent_id);
-                if (! $parent) {
+                $parentChain[] = $currentId;
+                $currentId = $templatesById[$currentId]->parent_id;
+
+                // Prevent infinite loops
+                if ($depth > 100) {
                     break;
                 }
-                $parentChain[] = $parent->id;
-                $current = $parent;
             }
 
             $template->depth = $depth;
@@ -165,14 +186,18 @@ new class extends Component
 
     public function edit(int $id): void
     {
-        // Check for affected projects/tasks
-        $this->affectedProjectsCount = Project::whereHas('tasks', function ($q) use ($id) {
-            $q->where('template_task_id', $id);
-        })->count();
+        // Check for affected projects/tasks with caching (5 minutes)
+        $this->affectedProjectsCount = Cache::remember(
+            "template_{$id}_affected_projects",
+            300,
+            fn () => Project::whereHas('tasks', fn ($q) => $q->where('template_task_id', $id))->count()
+        );
 
-        $this->tasksWithProgressCount = Task::where('template_task_id', $id)
-            ->whereHas('progress')
-            ->count();
+        $this->tasksWithProgressCount = Cache::remember(
+            "template_{$id}_tasks_with_progress",
+            300,
+            fn () => Task::where('template_task_id', $id)->whereHas('progress')->count()
+        );
 
         // If there are affected items, show warning first
         if ($this->affectedProjectsCount > 0 || $this->tasksWithProgressCount > 0) {
@@ -243,6 +268,15 @@ new class extends Component
             TaskTemplate::create($data);
         }
 
+        // Clear statistics cache when templates change
+        Cache::forget('task_template_stats');
+
+        // Clear edit warning caches for this template
+        if ($this->editingId) {
+            Cache::forget("template_{$this->editingId}_affected_projects");
+            Cache::forget("template_{$this->editingId}_tasks_with_progress");
+        }
+
         $this->reset(['showModal', 'editingId', 'name', 'volume', 'unit', 'weight', 'price', 'parentId']);
         $this->dispatch('template-saved');
     }
@@ -250,6 +284,14 @@ new class extends Component
     public function delete(int $id): void
     {
         TaskTemplate::findOrFail($id)->delete();
+
+        // Clear statistics cache when templates change
+        Cache::forget('task_template_stats');
+
+        // Clear edit warning caches for this template
+        Cache::forget("template_{$id}_affected_projects");
+        Cache::forget("template_{$id}_tasks_with_progress");
+
         $this->dispatch('template-deleted');
     }
 
