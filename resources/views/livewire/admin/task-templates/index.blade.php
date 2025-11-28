@@ -41,6 +41,15 @@ new class extends Component
 
     public ?int $pendingEditId = null;
 
+    // Sync modal properties
+    public bool $showSyncModal = false;
+
+    public ?int $syncTemplateId = null;
+
+    public int $syncTasksCount = 0;
+
+    public int $syncProjectsCount = 0;
+
     public function mount(): void
     {
         // Expand all root-level templates by default
@@ -122,6 +131,7 @@ new class extends Component
 
         $allTemplates = TaskTemplate::query()
             ->with(['parent:id,name', 'children:id,parent_id'])
+            ->withCount('tasks')
             ->when($this->search, fn ($query) => $query->where('name', 'like', "%{$this->search}%"))
             ->orderBy('_lft')
             ->get();
@@ -236,6 +246,51 @@ new class extends Component
         $this->pendingEditId = null;
         $this->affectedProjectsCount = 0;
         $this->tasksWithProgressCount = 0;
+    }
+
+    public function showSyncConfirmation(int $id): void
+    {
+        $this->syncTemplateId = $id;
+        $this->syncProjectsCount = Project::whereHas('tasks', fn ($q) => $q->where('template_task_id', $id))->count();
+        $this->syncTasksCount = Task::where('template_task_id', $id)->count();
+        $this->showSyncModal = true;
+    }
+
+    public function syncToProjects(): void
+    {
+        if (! $this->syncTemplateId) {
+            return;
+        }
+
+        $template = TaskTemplate::findOrFail($this->syncTemplateId);
+
+        // Update all tasks from this template in a single query
+        Task::where('template_task_id', $this->syncTemplateId)
+            ->update([
+                'name' => $template->name,
+                'volume' => $template->volume,
+                'unit' => $template->unit,
+                'weight' => $template->weight,
+                'price' => $template->price,
+            ]);
+
+        // Recalculate total_price for each task (trigger model event)
+        Task::where('template_task_id', $this->syncTemplateId)
+            ->each(fn ($task) => $task->save());
+
+        $this->showSyncModal = false;
+        $this->syncTemplateId = null;
+        $this->syncTasksCount = 0;
+        $this->syncProjectsCount = 0;
+        $this->dispatch('tasks-synced');
+    }
+
+    public function cancelSync(): void
+    {
+        $this->showSyncModal = false;
+        $this->syncTemplateId = null;
+        $this->syncTasksCount = 0;
+        $this->syncProjectsCount = 0;
     }
 
     public function save(): void
@@ -429,6 +484,16 @@ new class extends Component
                         <td class="px-4 py-3 text-sm">{{ $template->price > 0 ? number_format($template->price, 2) : '-' }}</td>
                         <td class="px-4 py-3 text-right text-sm">
                             <div class="flex items-center justify-end gap-2">
+                                @if($template->tasks_count > 0 && !$template->has_children)
+                                    <flux:button
+                                        wire:click="showSyncConfirmation({{ $template->id }})"
+                                        size="sm"
+                                        variant="ghost"
+                                        class="text-blue-600 hover:text-blue-700"
+                                    >
+                                        Sync
+                                    </flux:button>
+                                @endif
                                 <flux:button wire:click="edit({{ $template->id }})" size="sm" variant="ghost">
                                     Edit
                                 </flux:button>
@@ -574,6 +639,46 @@ new class extends Component
                 </flux:button>
                 <flux:button wire:click="confirmEdit" variant="primary">
                     Continue Editing
+                </flux:button>
+            </div>
+        </div>
+    </flux:modal>
+
+    <!-- Sync Confirmation Modal -->
+    <flux:modal wire:model="showSyncModal" class="max-w-md">
+        <div class="space-y-4">
+            <div class="flex items-center gap-3">
+                <div class="flex h-10 w-10 items-center justify-center rounded-full bg-blue-100 dark:bg-blue-900/30">
+                    <svg class="h-6 w-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                    </svg>
+                </div>
+                <flux:heading size="lg">Sync to Projects</flux:heading>
+            </div>
+
+            <flux:text class="text-neutral-600 dark:text-neutral-400">
+                This will update task values in all existing projects to match the current template values.
+            </flux:text>
+
+            <div class="rounded-lg border border-blue-200 bg-blue-50 p-3 dark:border-blue-800 dark:bg-blue-900/20">
+                <ul class="space-y-1 text-sm text-blue-800 dark:text-blue-200">
+                    <li>{{ $syncProjectsCount }} project(s) will be updated</li>
+                    <li>{{ $syncTasksCount }} task(s) will be synced</li>
+                </ul>
+            </div>
+
+            <div class="rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-800 dark:bg-amber-900/20">
+                <p class="text-sm text-amber-800 dark:text-amber-200">
+                    <strong>Note:</strong> Progress percentages will NOT change. Only task values (volume, price, weight, unit) will be updated.
+                </p>
+            </div>
+
+            <div class="flex justify-end gap-2">
+                <flux:button wire:click="cancelSync" variant="ghost">
+                    Cancel
+                </flux:button>
+                <flux:button wire:click="syncToProjects" variant="primary">
+                    Sync All
                 </flux:button>
             </div>
         </div>

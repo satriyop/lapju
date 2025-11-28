@@ -51,4 +51,9 @@ class TaskTemplate extends Model
     {
         return $this->hasMany(TaskTemplate::class, 'parent_id');
     }
+
+    public function tasks(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(Task::class, 'template_task_id');
+    }
 }
