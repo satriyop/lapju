@@ -474,11 +474,11 @@ new class extends Component
         }
 
         $this->validate([
-            "photos.{$rootTaskId}" => 'required|image|max:5120|mimes:jpeg,jpg,png,webp',
+            "photos.{$rootTaskId}" => 'required|image|max:2048|mimes:jpeg,jpg,png,webp',
         ], [
             "photos.{$rootTaskId}.required" => 'Please select an image.',
             "photos.{$rootTaskId}.image" => 'File must be an image.',
-            "photos.{$rootTaskId}.max" => 'Image must not exceed 5MB.',
+            "photos.{$rootTaskId}.max" => 'Image must not exceed 2MB. Photos are automatically compressed.',
             "photos.{$rootTaskId}.mimes" => 'Image must be jpeg, jpg, png, or webp format.',
         ]);
 
@@ -1132,20 +1132,31 @@ new class extends Component
                                                 Tap to add photo
                                             </p>
                                             <p class="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
-                                                PNG, JPG, WEBP up to 5MB
+                                                PNG, JPG, WEBP up to 2MB
+                                            </p>
+                                            <p class="mt-1 text-xs text-neutral-400 dark:text-neutral-500">
+                                                Large photos will be compressed automatically
                                             </p>
                                         </div>
                                     </label>
                                     <input
                                         type="file"
                                         id="photo-{{ $rootTask->id }}"
-                                        wire:model="photos.{{ $rootTask->id }}"
+                                        data-task-id="{{ $rootTask->id }}"
+                                        onchange="handlePhotoSelection(this)"
                                         accept="image/*"
                                         capture="camera"
                                         class="hidden"
                                     />
+                                    <input
+                                        type="file"
+                                        id="compressed-photo-{{ $rootTask->id }}"
+                                        wire:model="photos.{{ $rootTask->id }}"
+                                        class="hidden"
+                                    />
+                                    <div id="upload-status-{{ $rootTask->id }}" class="mt-2 text-sm"></div>
                                     <div wire:loading wire:target="photos.{{ $rootTask->id }}" class="mt-2 text-sm text-blue-600">
-                                        Processing...
+                                        Uploading...
                                     </div>
                                 </div>
                             @endif
@@ -1172,3 +1183,141 @@ new class extends Component
         </div>
     @endif
 </div>
+
+{{-- Image Compression Library --}}
+<script src="https://cdn.jsdelivr.net/npm/browser-image-compression@2.0.2/dist/browser-image-compression.js"></script>
+
+<script>
+/**
+ * Handle photo selection with automatic compression
+ * Prevents large file uploads that cause server overload
+ */
+async function handlePhotoSelection(input) {
+    const file = input.files[0];
+    if (!file) return;
+
+    const taskId = input.dataset.taskId;
+    const statusDiv = document.getElementById(`upload-status-${taskId}`);
+    const compressedInput = document.getElementById(`compressed-photo-${taskId}`);
+
+    // Show initial status
+    statusDiv.innerHTML = '<span class="text-blue-600">📸 Preparing photo...</span>';
+
+    try {
+        // Validate file type
+        if (!file.type.startsWith('image/')) {
+            throw new Error('Please select an image file (PNG, JPG, WEBP)');
+        }
+
+        // Validate file size (max 20MB - hard limit before compression)
+        const maxSizeBeforeCompression = 20 * 1024 * 1024; // 20MB
+        if (file.size > maxSizeBeforeCompression) {
+            throw new Error('Photo is too large (max 20MB). Please use a smaller photo.');
+        }
+
+        // Show original size
+        const originalSizeMB = (file.size / 1024 / 1024).toFixed(2);
+        console.log(`Original photo size: ${originalSizeMB}MB`);
+
+        // Compression options
+        const options = {
+            maxSizeMB: 2,              // Maximum file size after compression
+            maxWidthOrHeight: 1920,    // Maximum dimension (good for mobile viewing)
+            useWebWorker: true,        // Use web worker for better performance
+            fileType: file.type,       // Preserve original format
+            initialQuality: 0.8,       // Initial quality (0-1)
+        };
+
+        // Show compression status
+        statusDiv.innerHTML = `<span class="text-blue-600">🔄 Compressing ${originalSizeMB}MB photo...</span>`;
+
+        // Compress the image
+        const compressedFile = await imageCompression(file, options);
+
+        // Show compressed size
+        const compressedSizeMB = (compressedFile.size / 1024 / 1024).toFixed(2);
+        const savings = ((1 - compressedFile.size / file.size) * 100).toFixed(0);
+        console.log(`Compressed to: ${compressedSizeMB}MB (${savings}% smaller)`);
+
+        // Validate compressed file doesn't exceed 2MB
+        if (compressedFile.size > 2 * 1024 * 1024) {
+            statusDiv.innerHTML = `<span class="text-amber-600">⚠️ Photo is ${compressedSizeMB}MB after compression. Trying higher compression...</span>`;
+
+            // Try more aggressive compression
+            options.maxSizeMB = 1.5;
+            options.initialQuality = 0.7;
+            const reCompressed = await imageCompression(file, options);
+
+            if (reCompressed.size > 2 * 1024 * 1024) {
+                throw new Error(`Photo is still too large (${(reCompressed.size / 1024 / 1024).toFixed(2)}MB) even after compression. Please use a different photo.`);
+            }
+
+            // Use the more compressed version
+            compressedFile = reCompressed;
+        }
+
+        // Create a new File object with the compressed data
+        const compressedFileToUpload = new File(
+            [compressedFile],
+            file.name,
+            { type: compressedFile.type }
+        );
+
+        // Create a DataTransfer object to set the file input value
+        const dataTransfer = new DataTransfer();
+        dataTransfer.items.add(compressedFileToUpload);
+        compressedInput.files = dataTransfer.files;
+
+        // Trigger Livewire upload
+        const event = new Event('change', { bubbles: true });
+        compressedInput.dispatchEvent(event);
+
+        // Show success status
+        statusDiv.innerHTML = `<span class="text-green-600">✅ Ready to upload (${compressedSizeMB}MB, saved ${savings}%)</span>`;
+
+        // Clear original input
+        input.value = '';
+
+    } catch (error) {
+        console.error('Photo compression error:', error);
+
+        // Show user-friendly error
+        statusDiv.innerHTML = `<span class="text-red-600">❌ ${error.message}</span>`;
+
+        // Clear both inputs
+        input.value = '';
+        compressedInput.value = '';
+
+        // Alert user for critical errors
+        if (error.message.includes('too large') || error.message.includes('different photo')) {
+            alert(error.message);
+        }
+    }
+}
+
+/**
+ * Handle Livewire upload errors (413 Payload Too Large, etc.)
+ */
+document.addEventListener('livewire:init', () => {
+    Livewire.hook('request', ({ fail }) => {
+        fail(({ status, content, preventDefault }) => {
+            // Handle 413 Payload Too Large error
+            if (status === 413) {
+                preventDefault();
+                alert('Photo upload failed: File too large for server.\n\nThis usually means the server configuration needs adjustment.\n\nPlease contact your administrator.');
+                console.error('413 Payload Too Large - Server rejected upload');
+            }
+
+            // Handle 500 errors
+            if (status === 500) {
+                console.error('500 Server Error during upload:', content);
+            }
+
+            // Handle timeout
+            if (status === 504 || status === 408) {
+                alert('Upload timeout: Please check your internet connection and try again.');
+            }
+        });
+    });
+});
+</script>
