@@ -71,23 +71,16 @@ new class extends Component
             }
         }
 
-        // Default filters
+        // Default filters - only set Kodam, NOT Korem (to prevent auto-loading heavy data)
         if (! $this->selectedKodamId) {
             $kodamIV = Office::whereHas('level', fn ($q) => $q->where('level', 1))
                 ->where('name', 'like', '%Kodam IV%')
                 ->first();
 
-            $korem074 = Office::whereHas('level', fn ($q) => $q->where('level', 2))
-                ->where('name', 'like', '%074%')
-                ->first();
-
             if ($kodamIV) {
                 $this->selectedKodamId = $kodamIV->id;
             }
-
-            if ($korem074) {
-                $this->selectedKoremId = $korem074->id;
-            }
+            // Don't auto-select Korem - require user to select to prevent memory issues
         }
     }
 
