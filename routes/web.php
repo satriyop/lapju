@@ -23,9 +23,6 @@ Route::middleware(['auth', 'approved'])->group(function () {
     // Reports routes
     Volt::route('reports', 'reports.index')->name('reports.index');
     Volt::route('reports/daily', 'reports.daily')->name('reports.daily');
-    Volt::route('reports/weekly', 'reports.weekly')->name('reports.weekly');
-    Volt::route('reports/monthly', 'reports.monthly')->name('reports.monthly');
-    Volt::route('reports/to-date', 'reports.to-date')->name('reports.to-date');
 
     // Lapjusik Harian
     Volt::route('lapjusik', 'lapjusik.index')->name('lapjusik.index');

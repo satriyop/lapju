@@ -2,6 +2,7 @@
 
 use App\Exports\LapjusikExport;
 use App\Models\Office;
+use App\Models\OfficeLevel;
 use App\Models\Project;
 use App\Models\Task;
 use App\Models\TaskProgress;
@@ -24,40 +25,185 @@ new class extends Component
 
     public int $selectedYear;
 
+    // Cascading office filters
+    public ?int $selectedKodamId = null;
+
+    public ?int $selectedKoremId = null;
+
+    public ?int $selectedKodimId = null;
+
+    public ?int $selectedKoramilId = null;
+
+    // Lock filters for Managers to their Kodim coverage
+    public bool $filtersLocked = false;
+
     public function mount(): void
     {
         $this->selectedMonth = now()->month;
         $this->selectedYear = now()->year;
+
+        $currentUser = auth()->user();
+
+        // Reporters don't use office filters - just their assigned projects
+        if ($currentUser->hasRole('Reporter')) {
+            return;
+        }
+
+        // Managers at Kodim level - set defaults to their Kodim and lock filters
+        if ($currentUser->office_id) {
+            $userOffice = Office::with('level', 'parent.parent')->find($currentUser->office_id);
+
+            if ($userOffice && $userOffice->level->level === 3) {
+                $this->selectedKodimId = $userOffice->id;
+
+                if ($userOffice->parent) {
+                    $this->selectedKoremId = $userOffice->parent->id;
+
+                    if ($userOffice->parent->parent) {
+                        $this->selectedKodamId = $userOffice->parent->parent->id;
+                    }
+                }
+
+                $this->filtersLocked = true;
+            }
+        }
+
+        // If not a Manager or no office assigned, set default filters
+        if (! $this->selectedKodamId) {
+            $kodamIV = Office::whereHas('level', fn ($q) => $q->where('level', 1))
+                ->where('name', 'like', '%Kodam IV%')
+                ->first();
+
+            $korem074 = Office::whereHas('level', fn ($q) => $q->where('level', 2))
+                ->where('name', 'like', '%074%')
+                ->first();
+
+            if ($kodamIV) {
+                $this->selectedKodamId = $kodamIV->id;
+            }
+
+            if ($korem074) {
+                $this->selectedKoremId = $korem074->id;
+            }
+        }
     }
 
+    public function updatedSelectedKodamId(): void
+    {
+        if ($this->filtersLocked) {
+            return;
+        }
+
+        $this->selectedKoremId = null;
+        $this->selectedKodimId = null;
+        $this->selectedKoramilId = null;
+        $this->projectId = null;
+    }
+
+    public function updatedSelectedKoremId(): void
+    {
+        if ($this->filtersLocked) {
+            return;
+        }
+
+        $this->selectedKodimId = null;
+        $this->selectedKoramilId = null;
+        $this->projectId = null;
+    }
+
+    public function updatedSelectedKodimId(): void
+    {
+        if ($this->filtersLocked) {
+            return;
+        }
+
+        $this->selectedKoramilId = null;
+        $this->projectId = null;
+    }
+
+    public function updatedSelectedKoramilId(): void
+    {
+        $this->projectId = null;
+    }
+
+    // Cache for office levels
+    private ?object $cachedOfficeLevels = null;
+
     /**
-     * Get accessible projects based on user role
+     * Get office levels (cached)
+     */
+    private function getOfficeLevels(): object
+    {
+        if ($this->cachedOfficeLevels === null) {
+            $levels = OfficeLevel::all();
+
+            $this->cachedOfficeLevels = (object) [
+                'kodam' => $levels->firstWhere('level', 1),
+                'korem' => $levels->firstWhere('level', 2),
+                'kodim' => $levels->firstWhere('level', 3),
+                'koramil' => $levels->firstWhere('level', 4),
+            ];
+        }
+
+        return $this->cachedOfficeLevels;
+    }
+
+    // Cache for user office level check
+    private ?int $cachedUserOfficeLevel = null;
+
+    /**
+     * Get accessible projects based on user role and office filters
      */
     private function getAccessibleProjects()
     {
         $currentUser = Auth::user();
-        $query = Project::with(['location', 'partner', 'office']);
 
-        if ($currentUser->isAdmin() || $currentUser->hasPermission('*')) {
-            return $query->orderBy('name')->get();
+        // Reporters only see their assigned projects
+        if ($currentUser->hasRole('Reporter')) {
+            return $currentUser->projects()
+                ->select(['projects.id', 'projects.name', 'projects.office_id', 'projects.location_id', 'projects.partner_id'])
+                ->orderBy('name')
+                ->get();
         }
 
-        if (! $currentUser->office_id) {
-            return $currentUser->projects()->with(['location', 'partner', 'office'])->orderBy('name')->get();
+        $query = Project::select(['id', 'name', 'office_id', 'location_id', 'partner_id']);
+
+        // Managers at Kodim level - show Koramils under their Kodim
+        if ($currentUser->hasRole('Manager') && $currentUser->office_id) {
+            // Cache the user office level check
+            if ($this->cachedUserOfficeLevel === null) {
+                $this->cachedUserOfficeLevel = Office::where('id', $currentUser->office_id)
+                    ->join('office_levels', 'offices.level_id', '=', 'office_levels.id')
+                    ->value('office_levels.level') ?? 0;
+            }
+
+            if ($this->cachedUserOfficeLevel === 3) {
+                $koramils = Office::where('parent_id', $currentUser->office_id)->pluck('id');
+                $query->whereIn('office_id', $koramils);
+
+                if ($this->selectedKoramilId) {
+                    $query->where('office_id', $this->selectedKoramilId);
+                }
+
+                return $query->orderBy('name')->get();
+            }
         }
 
-        $currentOffice = Office::with('level')->find($currentUser->office_id);
-
-        if (! $currentOffice) {
-            return $currentUser->projects()->with(['location', 'partner', 'office'])->orderBy('name')->get();
-        }
-
-        if ($currentOffice->level->level === 3) {
-            $query->whereHas('office', function ($q) use ($currentUser) {
-                $q->where('parent_id', $currentUser->office_id);
-            });
-        } elseif ($currentOffice->level->level === 4) {
-            $query->where('office_id', $currentUser->office_id);
+        // Apply cascading office filters
+        if ($this->selectedKoramilId) {
+            $query->where('office_id', $this->selectedKoramilId);
+        } elseif ($this->selectedKodimId) {
+            $koramils = Office::where('parent_id', $this->selectedKodimId)->pluck('id');
+            $query->whereIn('office_id', $koramils);
+        } elseif ($this->selectedKoremId) {
+            $kodims = Office::where('parent_id', $this->selectedKoremId)->pluck('id');
+            $koramils = Office::whereIn('parent_id', $kodims)->pluck('id');
+            $query->whereIn('office_id', $koramils);
+        } elseif ($this->selectedKodamId) {
+            $korems = Office::where('parent_id', $this->selectedKodamId)->pluck('id');
+            $kodims = Office::whereIn('parent_id', $korems)->pluck('id');
+            $koramils = Office::whereIn('parent_id', $kodims)->pluck('id');
+            $query->whereIn('office_id', $koramils);
         }
 
         return $query->orderBy('name')->get();
@@ -88,7 +234,7 @@ new class extends Component
     }
 
     /**
-     * Get hierarchical tasks with progress data
+     * Get hierarchical tasks with progress data (daily incremental values)
      */
     private function getTasksWithProgress(): array
     {
@@ -96,52 +242,64 @@ new class extends Component
             return [];
         }
 
-        $project = Project::find($this->projectId);
-        if (! $project) {
-            return [];
-        }
-
-        // Get all tasks for the project
+        // Get all tasks for the project (select only needed columns)
         $tasks = Task::where('project_id', $this->projectId)
+            ->select(['id', 'project_id', 'parent_id', 'name', 'volume', 'unit', 'weight', '_lft', '_rgt'])
             ->orderBy('_lft')
             ->get();
 
-        // Get all progress for the month
+        if ($tasks->isEmpty()) {
+            return [];
+        }
+
+        // Pre-compute which tasks have children using in-memory lookup (no N+1)
+        $parentIds = $tasks->pluck('parent_id')->filter()->unique()->toArray();
+
         $startOfMonth = Carbon::create($this->selectedYear, $this->selectedMonth, 1)->startOfDay();
         $endOfMonth = $startOfMonth->copy()->endOfMonth()->endOfDay();
 
-        $progressRecords = TaskProgress::where('project_id', $this->projectId)
-            ->whereBetween('progress_date', [$startOfMonth, $endOfMonth])
+        // Get last progress entry BEFORE the month starts for each task (for cross-month calculation)
+        $lastBeforeMonth = TaskProgress::where('project_id', $this->projectId)
+            ->where('progress_date', '<', $startOfMonth)
+            ->select(['task_id', 'percentage', 'progress_date'])
+            ->orderBy('progress_date', 'desc')
             ->get()
-            ->groupBy(function ($progress) {
-                $date = $progress->progress_date;
-                if (is_string($date)) {
-                    return Carbon::parse($date)->format('Y-m-d');
-                }
+            ->unique('task_id')
+            ->keyBy('task_id');
 
-                return $date->format('Y-m-d');
-            })
-            ->map(function ($dateGroup) {
-                return $dateGroup->keyBy('task_id');
-            });
+        // Get all progress entries for the current month
+        $monthProgress = TaskProgress::where('project_id', $this->projectId)
+            ->whereBetween('progress_date', [$startOfMonth, $endOfMonth])
+            ->select(['task_id', 'progress_date', 'percentage'])
+            ->orderBy('progress_date')
+            ->get()
+            ->groupBy('task_id');
 
-        // Build hierarchical structure - numbering comes from task names (already has Roman numerals)
+        // Pre-compute calendar days once (not inside loop)
+        $calendarDays = $this->getCalendarDays();
+
+        // Index tasks by ID for fast parent lookup
+        $tasksById = $tasks->keyBy('id');
+
+        // Build hierarchical structure
         $result = [];
-        $leafCounters = []; // Track sequential numbers for leaf tasks under each parent
+        $leafCounters = [];
 
         foreach ($tasks as $task) {
+            // Calculate depth using indexed lookup
             $depth = 0;
             $currentId = $task->parent_id;
 
             while ($currentId !== null) {
                 $depth++;
-                $parent = $tasks->firstWhere('id', $currentId);
+                $parent = $tasksById[$currentId] ?? null;
                 $currentId = $parent?->parent_id;
             }
 
-            $hasChildren = $task->children()->exists();
+            // Check if task has children using pre-computed parent IDs (no query)
+            $hasChildren = in_array($task->id, $parentIds);
 
-            // Generate numbering only for leaf tasks (sequential under their parent)
+            // Generate numbering only for leaf tasks
             $numbering = '';
             if (! $hasChildren && $task->parent_id !== null) {
                 if (! isset($leafCounters[$task->parent_id])) {
@@ -151,19 +309,66 @@ new class extends Component
                 $numbering = (string) $leafCounters[$task->parent_id];
             }
 
-            // Get daily progress for this task
+            // Calculate daily incremental progress for this task
             $dailyProgress = [];
-            $calendarDays = $this->getCalendarDays();
 
-            foreach ($calendarDays as $day) {
-                $dateKey = $day['date'];
-                $progress = null;
-
-                if (isset($progressRecords[$dateKey]) && isset($progressRecords[$dateKey][$task->id])) {
-                    $progress = $progressRecords[$dateKey][$task->id]->percentage;
+            // Parent tasks always show blank
+            if ($hasChildren) {
+                foreach ($calendarDays as $day) {
+                    $dailyProgress[$day['date']] = null;
                 }
+            } else {
+                // Get task's progress entries for the month
+                $taskMonthProgress = $monthProgress[$task->id] ?? collect();
 
-                $dailyProgress[$dateKey] = $progress;
+                // Index by date for O(1) lookup
+                $progressByDate = $taskMonthProgress->keyBy(function ($p) {
+                    $date = $p->progress_date;
+
+                    return is_string($date) ? Carbon::parse($date)->format('Y-m-d') : $date->format('Y-m-d');
+                });
+
+                // Get the baseline (last entry before this month, or 0)
+                $lastBefore = $lastBeforeMonth[$task->id] ?? null;
+
+                foreach ($calendarDays as $day) {
+                    $dateKey = $day['date'];
+
+                    // No entry for this date = blank
+                    if (! isset($progressByDate[$dateKey])) {
+                        $dailyProgress[$dateKey] = null;
+                        continue;
+                    }
+
+                    // Get current cumulative percentage (cap at 100%)
+                    $currentPercentage = min(100, (float) $progressByDate[$dateKey]->percentage);
+
+                    // Find previous entry (could be earlier in month OR before month)
+                    $previousPercentage = 0;
+
+                    // Check for earlier entries this month
+                    $previousEntry = $taskMonthProgress
+                        ->filter(function ($p) use ($dateKey) {
+                            $pDate = $p->progress_date;
+                            $pDateStr = is_string($pDate) ? Carbon::parse($pDate)->format('Y-m-d') : $pDate->format('Y-m-d');
+
+                            return $pDateStr < $dateKey;
+                        })
+                        ->sortByDesc(function ($p) {
+                            return is_string($p->progress_date) ? $p->progress_date : $p->progress_date->format('Y-m-d');
+                        })
+                        ->first();
+
+                    if ($previousEntry) {
+                        $previousPercentage = min(100, (float) $previousEntry->percentage);
+                    } elseif ($lastBefore) {
+                        // Use last entry before month as baseline
+                        $previousPercentage = min(100, (float) $lastBefore->percentage);
+                    }
+
+                    // Calculate daily change (can be negative for corrections)
+                    $dailyProgress[$dateKey] = round($currentPercentage - $previousPercentage, 2);
+                }
             }
 
             $result[] = [
@@ -227,7 +432,53 @@ new class extends Component
 
     public function with(): array
     {
-        $project = $this->projectId ? Project::with(['location', 'partner', 'office'])->find($this->projectId) : null;
+        // Only load project with minimal relations when selected
+        $project = null;
+        if ($this->projectId) {
+            $project = Project::select(['id', 'name', 'location_id', 'partner_id', 'office_id'])
+                ->with([
+                    'location:id,province_name',
+                ])
+                ->find($this->projectId);
+        }
+
+        // Get office levels (cached)
+        $levels = $this->getOfficeLevels();
+        $kodamLevel = $levels->kodam;
+        $koremLevel = $levels->korem;
+        $kodimLevel = $levels->kodim;
+        $koramilLevel = $levels->koramil;
+
+        // Cascading office filters - only query what's needed
+        $kodams = $kodamLevel
+            ? Office::select('id', 'name')->where('level_id', $kodamLevel->id)->orderBy('name')->get()
+            : collect();
+
+        $korems = $koremLevel && $this->selectedKodamId
+            ? Office::select('id', 'name')->where('level_id', $koremLevel->id)->where('parent_id', $this->selectedKodamId)->orderBy('name')->get()
+            : collect();
+
+        $kodims = $kodimLevel && $this->selectedKoremId
+            ? Office::where('level_id', $kodimLevel->id)
+                ->where('parent_id', $this->selectedKoremId)
+                ->selectRaw('offices.id, offices.name, (
+                    SELECT COUNT(*) FROM projects
+                    WHERE projects.office_id IN (
+                        SELECT id FROM offices AS koramils WHERE koramils.parent_id = offices.id
+                    )
+                ) as projects_count')
+                ->orderBy('name')
+                ->get()
+            : collect();
+
+        $koramils = $koramilLevel && $this->selectedKodimId
+            ? Office::select('id', 'name')
+                ->where('level_id', $koramilLevel->id)
+                ->where('parent_id', $this->selectedKodimId)
+                ->withCount('projects')
+                ->orderBy('name')
+                ->get()
+            : collect();
 
         return [
             'projects' => $this->getAccessibleProjects(),
@@ -235,268 +486,324 @@ new class extends Component
             'tasksWithProgress' => $this->getTasksWithProgress(),
             'selectedProject' => $project,
             'monthName' => Carbon::create($this->selectedYear, $this->selectedMonth, 1)->locale('id')->translatedFormat('F'),
+            'kodams' => $kodams,
+            'korems' => $korems,
+            'kodims' => $kodims,
+            'koramils' => $koramils,
         ];
     }
 }; ?>
 
-<div class="flex h-full w-full flex-1 flex-col">
-    {{-- Document Header - Mimics official document style --}}
-    <div class="border-b-4 border-double border-emerald-700 bg-gradient-to-br from-emerald-50 via-white to-teal-50 px-6 py-5 dark:border-emerald-500 dark:from-zinc-900 dark:via-zinc-800 dark:to-zinc-900">
-        {{-- Title Banner --}}
-        <div class="mb-4 text-center">
-            <h1 class="font-mono text-2xl font-black tracking-[0.2em] text-emerald-800 dark:text-emerald-400">
-                LAPJUSIK HARIAN
-            </h1>
-            <p class="mt-1 font-mono text-xs tracking-widest text-emerald-600 dark:text-emerald-500">
-                LAPORAN KEMAJUAN FISIK HARIAN
-            </p>
-        </div>
+<div class="flex h-full w-full flex-1 flex-col gap-6">
+    {{-- Filters --}}
+    @if(!auth()->user()->hasRole('Reporter'))
+        <div class="grid grid-cols-1 gap-4 md:grid-cols-4">
+            <div>
+                <label class="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">
+                    {{ __('Kodam') }}
+                </label>
+                <flux:select wire:model.live="selectedKodamId" :disabled="$filtersLocked">
+                    <option value="">{{ __('All Kodam') }}</option>
+                    @foreach($kodams as $kodam)
+                        <option value="{{ $kodam->id }}">{{ $kodam->name }}</option>
+                    @endforeach
+                </flux:select>
+            </div>
 
-        {{-- Project Selection --}}
-        <div class="mx-auto max-w-4xl">
-            <div class="grid gap-4 md:grid-cols-3">
-                <div class="md:col-span-2">
-                    <label class="mb-1 block font-mono text-xs font-bold uppercase tracking-wider text-emerald-700 dark:text-emerald-400">
-                        Pilih Proyek
-                    </label>
-                    <flux:select wire:model.live="projectId" class="w-full font-mono">
-                        <option value="">-- Pilih Proyek --</option>
-                        @foreach($projects as $proj)
-                            <option value="{{ $proj->id }}">{{ $proj->name }}</option>
-                        @endforeach
-                    </flux:select>
-                </div>
-                <div>
-                    <label class="mb-1 block font-mono text-xs font-bold uppercase tracking-wider text-emerald-700 dark:text-emerald-400">
-                        Periode
-                    </label>
-                    <div class="flex items-center gap-2">
-                        <flux:button wire:click="previousMonth" size="sm" variant="ghost" class="!px-2">
-                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
-                            </svg>
-                        </flux:button>
-                        <div class="flex-1 rounded-lg border border-emerald-300 bg-white px-3 py-2 text-center font-mono text-sm font-bold text-emerald-800 dark:border-emerald-700 dark:bg-zinc-800 dark:text-emerald-400">
-                            {{ strtoupper($monthName) }} {{ $selectedYear }}
-                        </div>
-                        <flux:button wire:click="nextMonth" size="sm" variant="ghost" class="!px-2">
-                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
-                            </svg>
-                        </flux:button>
-                    </div>
-                </div>
+            <div>
+                <label class="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">
+                    {{ __('Korem') }}
+                </label>
+                <flux:select wire:model.live="selectedKoremId" :disabled="$filtersLocked || !$selectedKodamId">
+                    <option value="">{{ $selectedKodamId ? __('Select Korem...') : __('Select Kodam first') }}</option>
+                    @foreach($korems as $korem)
+                        <option value="{{ $korem->id }}">{{ $korem->name }}</option>
+                    @endforeach
+                </flux:select>
+            </div>
+
+            <div>
+                <label class="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">
+                    {{ __('Kodim') }}
+                </label>
+                <flux:select wire:model.live="selectedKodimId" :disabled="$filtersLocked || !$selectedKoremId">
+                    <option value="">{{ $selectedKoremId ? __('All Kodim') : __('Select Korem first') }}</option>
+                    @foreach($kodims as $kodim)
+                        <option value="{{ $kodim->id }}">{{ $kodim->name }} ({{ $kodim->projects_count }})</option>
+                    @endforeach
+                </flux:select>
+            </div>
+
+            <div>
+                <label class="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">
+                    {{ __('Koramil') }}
+                </label>
+                <flux:select wire:model.live="selectedKoramilId" :disabled="!$selectedKodimId">
+                    <option value="">{{ $selectedKodimId ? __('All Koramil') : __('Select Kodim first') }}</option>
+                    @foreach($koramils as $koramil)
+                        <option value="{{ $koramil->id }}">{{ $koramil->name }} ({{ $koramil->projects_count }})</option>
+                    @endforeach
+                </flux:select>
             </div>
         </div>
 
-        {{-- Project Info Cards --}}
-        @if($selectedProject)
-            <div class="mx-auto mt-4 max-w-4xl">
-                <div class="grid grid-cols-1 gap-3 md:grid-cols-3">
-                    {{-- PEKERJAAN --}}
-                    <div class="rounded-lg border-l-4 border-emerald-600 bg-white/80 px-4 py-3 shadow-sm dark:bg-zinc-800/80">
-                        <div class="font-mono text-[10px] font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-500">
-                            Pekerjaan
-                        </div>
-                        <div class="mt-1 font-mono text-sm font-semibold leading-tight text-zinc-800 dark:text-zinc-200">
-                            {{ $selectedProject->name }}
-                        </div>
-                    </div>
-                    {{-- LOKASI --}}
-                    <div class="rounded-lg border-l-4 border-teal-600 bg-white/80 px-4 py-3 shadow-sm dark:bg-zinc-800/80">
-                        <div class="font-mono text-[10px] font-bold uppercase tracking-wider text-teal-600 dark:text-teal-500">
-                            Lokasi
-                        </div>
-                        <div class="mt-1 font-mono text-sm font-semibold leading-tight text-zinc-800 dark:text-zinc-200">
-                            {{ $selectedProject->location?->province_name ?? '-' }}
-                        </div>
-                    </div>
-                    {{-- TAHUN ANGGARAN --}}
-                    <div class="rounded-lg border-l-4 border-cyan-600 bg-white/80 px-4 py-3 shadow-sm dark:bg-zinc-800/80">
-                        <div class="font-mono text-[10px] font-bold uppercase tracking-wider text-cyan-600 dark:text-cyan-500">
-                            Tahun Anggaran
-                        </div>
-                        <div class="mt-1 font-mono text-sm font-semibold leading-tight text-zinc-800 dark:text-zinc-200">
-                            {{ $selectedYear }}
-                        </div>
-                    </div>
-                </div>
+        {{-- Project and Period Selection --}}
+        <div class="grid grid-cols-1 gap-4 md:grid-cols-4">
+            <div class="md:col-span-2">
+                <label class="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">
+                    {{ __('Project') }}
+                </label>
+                <flux:select wire:model.live="projectId">
+                    <option value="">{{ __('Select Project...') }}</option>
+                    @foreach($projects as $proj)
+                        <option value="{{ $proj->id }}">{{ $proj->name }}</option>
+                    @endforeach
+                </flux:select>
             </div>
 
-            {{-- Export Button --}}
-            <div class="mx-auto mt-4 flex max-w-4xl justify-end">
-                <flux:button wire:click="exportExcel" variant="primary" size="sm" class="bg-emerald-600 hover:bg-emerald-700">
-                    <div class="flex items-center gap-2">
-                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
-                        </svg>
-                        <span>Export Excel</span>
+            <div class="md:col-span-2">
+                <label class="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">
+                    {{ __('Period') }}
+                </label>
+                <div class="flex items-center gap-2">
+                    <flux:button wire:click="previousMonth" size="sm" variant="ghost" icon="chevron-left" />
+                    <div class="flex-1 rounded-lg border border-neutral-200 bg-white px-4 py-2 text-center font-semibold text-neutral-900 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100">
+                        {{ strtoupper($monthName) }} {{ $selectedYear }}
                     </div>
+                    <flux:button wire:click="nextMonth" size="sm" variant="ghost" icon="chevron-right" />
+                </div>
+            </div>
+        </div>
+    @else
+        {{-- Reporter: Only project and period filter --}}
+        <div class="grid grid-cols-1 gap-4 md:grid-cols-4">
+            <div class="md:col-span-2">
+                <label class="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">
+                    {{ __('Project') }}
+                </label>
+                <flux:select wire:model.live="projectId">
+                    <option value="">{{ __('Select Project...') }}</option>
+                    @foreach($projects as $proj)
+                        <option value="{{ $proj->id }}">{{ $proj->name }}</option>
+                    @endforeach
+                </flux:select>
+            </div>
+
+            <div class="md:col-span-2">
+                <label class="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">
+                    {{ __('Period') }}
+                </label>
+                <div class="flex items-center gap-2">
+                    <flux:button wire:click="previousMonth" size="sm" variant="ghost" icon="chevron-left" />
+                    <div class="flex-1 rounded-lg border border-neutral-200 bg-white px-4 py-2 text-center font-semibold text-neutral-900 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100">
+                        {{ strtoupper($monthName) }} {{ $selectedYear }}
+                    </div>
+                    <flux:button wire:click="nextMonth" size="sm" variant="ghost" icon="chevron-right" />
+                </div>
+            </div>
+        </div>
+    @endif
+
+    {{-- Project Info Cards --}}
+    @if($selectedProject)
+        <div class="rounded-xl border border-neutral-200 bg-white p-4 dark:border-neutral-700 dark:bg-neutral-900">
+            <div class="flex items-start justify-between">
+                <div class="grid flex-1 grid-cols-1 gap-4 md:grid-cols-3">
+                    <div>
+                        <p class="text-xs font-medium uppercase tracking-wider text-neutral-500 dark:text-neutral-400">Pekerjaan</p>
+                        <p class="mt-1 font-semibold text-neutral-900 dark:text-neutral-100">{{ $selectedProject->name }}</p>
+                    </div>
+                    <div>
+                        <p class="text-xs font-medium uppercase tracking-wider text-neutral-500 dark:text-neutral-400">Lokasi</p>
+                        <p class="mt-1 font-semibold text-neutral-900 dark:text-neutral-100">{{ $selectedProject->location?->province_name ?? '-' }}</p>
+                    </div>
+                    <div>
+                        <p class="text-xs font-medium uppercase tracking-wider text-neutral-500 dark:text-neutral-400">Tahun Anggaran</p>
+                        <p class="mt-1 font-semibold text-neutral-900 dark:text-neutral-100">{{ $selectedYear }}</p>
+                    </div>
+                </div>
+                <flux:button wire:click="exportExcel" variant="primary" icon="arrow-down-tray">
+                    Export Excel
                 </flux:button>
             </div>
-        @endif
-    </div>
+        </div>
+    @endif
 
     {{-- Main Content --}}
     @if(!$projectId)
         {{-- Empty State --}}
-        <div class="flex flex-1 items-center justify-center p-8">
-            <div class="text-center">
-                <div class="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-emerald-100 dark:bg-emerald-900/30">
-                    <svg class="h-10 w-10 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
-                    </svg>
-                </div>
-                <h3 class="font-mono text-lg font-bold text-zinc-700 dark:text-zinc-300">
-                    Pilih Proyek
-                </h3>
-                <p class="mt-2 font-mono text-sm text-zinc-500 dark:text-zinc-400">
-                    Silakan pilih proyek untuk melihat Lapjusik Harian
-                </p>
-            </div>
+        <div class="flex flex-col items-center justify-center rounded-xl border-2 border-dashed border-neutral-300 bg-neutral-50 py-12 dark:border-neutral-700 dark:bg-neutral-800/50">
+            <svg class="h-12 w-12 text-neutral-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+            </svg>
+            <p class="mt-4 text-lg font-medium text-neutral-600 dark:text-neutral-400">
+                {{ __('Select a Project') }}
+            </p>
+            <p class="mt-1 text-sm text-neutral-500 dark:text-neutral-500">
+                {{ __('Please select a project to view daily progress report') }}
+            </p>
         </div>
     @else
         {{-- Spreadsheet Table --}}
-        <div class="flex-1 overflow-x-auto overflow-y-auto bg-zinc-100 p-4 dark:bg-zinc-900">
-            <div class="rounded-lg border border-zinc-300 bg-white shadow-xl dark:border-zinc-700 dark:bg-zinc-800">
-                {{-- Table --}}
-                <table class="w-full border-collapse font-mono text-xs" style="min-width: {{ 48 + 250 + (count($calendarDays) * 56) }}px;">
-                    {{-- Table Header --}}
-                    <thead class="sticky top-0 z-30">
-                        {{-- Month Header Row --}}
-                        <tr>
-                            <th rowspan="2" class="w-12 min-w-[48px] border border-zinc-400 bg-emerald-700 px-2 py-3 text-center font-bold text-white dark:border-zinc-600 dark:bg-emerald-800">
-                                NO
+        <div class="overflow-x-auto rounded-xl border border-neutral-200 dark:border-neutral-700">
+            <table class="w-full text-xs" style="min-width: {{ 48 + 250 + (count($calendarDays) * 56) }}px;">
+                {{-- Table Header --}}
+                <thead class="sticky top-0 z-30">
+                    {{-- Month Header Row --}}
+                    <tr class="border-b border-neutral-200 bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800">
+                        <th rowspan="2" class="w-12 min-w-[48px] border-r border-neutral-200 px-2 py-3 text-center text-sm font-semibold text-neutral-900 dark:border-neutral-700 dark:text-neutral-100">
+                            NO
+                        </th>
+                        <th rowspan="2" class="sticky left-0 z-40 w-[250px] min-w-[250px] border-r border-neutral-200 bg-neutral-50 px-3 py-3 text-left text-sm font-semibold text-neutral-900 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100">
+                            URAIAN PEKERJAAN
+                        </th>
+                        <th colspan="{{ count($calendarDays) }}" class="px-2 py-2 text-center text-sm font-semibold text-neutral-900 dark:text-neutral-100">
+                            {{ strtoupper($monthName) }}
+                        </th>
+                    </tr>
+                    {{-- Days Header Row --}}
+                    <tr class="border-b border-neutral-200 bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800">
+                        @foreach($calendarDays as $day)
+                            <th class="w-14 min-w-[56px] border-r border-neutral-200 px-1 py-2 text-center dark:border-neutral-700
+                                {{ $day['isSunday'] ? 'bg-red-50 text-red-700 dark:bg-red-900/20 dark:text-red-400' : ($day['isWeekend'] ? 'bg-amber-50 text-amber-700 dark:bg-amber-900/20 dark:text-amber-400' : '') }}">
+                                <div class="text-[10px] font-medium text-neutral-500 dark:text-neutral-400">{{ $day['dayName'] }}</div>
+                                <div class="text-sm font-semibold text-neutral-900 dark:text-neutral-100">{{ $day['day'] }}</div>
                             </th>
-                            <th rowspan="2" class="sticky left-0 z-40 w-[250px] min-w-[250px] border border-zinc-400 bg-emerald-700 px-3 py-3 text-left font-bold text-white dark:border-zinc-600 dark:bg-emerald-800">
-                                URAIAN PEKERJAAN
-                            </th>
-                            <th colspan="{{ count($calendarDays) }}" class="border border-zinc-400 bg-emerald-600 px-2 py-2 text-center font-bold text-white dark:border-zinc-600 dark:bg-emerald-700">
-                                {{ strtoupper($monthName) }}
-                            </th>
-                        </tr>
-                        {{-- Days Header Row --}}
-                        <tr>
+                        @endforeach
+                    </tr>
+                </thead>
+                {{-- Table Body --}}
+                <tbody class="divide-y divide-neutral-200 dark:divide-neutral-700">
+                    @forelse($tasksWithProgress as $index => $task)
+                        @php
+                            $isParent = $task['hasChildren'];
+                            $depth = $task['depth'];
+                            $bgClass = $isParent
+                                ? 'bg-neutral-100 dark:bg-neutral-800'
+                                : '';
+                        @endphp
+                        <tr class="{{ $bgClass }} hover:bg-neutral-50 dark:hover:bg-neutral-800/50">
+                            {{-- NO Column - Only show sequential number for leaf tasks --}}
+                            <td class="w-12 min-w-[48px] border-r border-neutral-200 px-2 py-2 text-center text-sm dark:border-neutral-700
+                                {{ $isParent ? 'bg-neutral-100 dark:bg-neutral-800' : '' }}">
+                                @if(!$isParent && $task['numbering'])
+                                    <span class="text-neutral-600 dark:text-neutral-400">
+                                        {{ $task['numbering'] }}
+                                    </span>
+                                @endif
+                            </td>
+                            {{-- URAIAN PEKERJAAN Column --}}
+                            <td class="sticky left-0 z-10 w-[250px] min-w-[250px] border-r border-neutral-200 bg-white px-3 py-2 dark:border-neutral-700 dark:bg-neutral-900
+                                {{ $isParent ? '!bg-neutral-100 dark:!bg-neutral-800' : '' }}"
+                                style="padding-left: {{ 12 + ($depth * 16) }}px">
+                                @if($isParent)
+                                    <span class="font-semibold text-neutral-900 dark:text-neutral-100">
+                                        {{ $task['name'] }}
+                                    </span>
+                                @else
+                                    <div class="flex items-start gap-2">
+                                        <span class="text-neutral-400">-</span>
+                                        <span class="text-neutral-700 dark:text-neutral-300">{{ $task['name'] }}</span>
+                                    </div>
+                                @endif
+                            </td>
+                            {{-- Daily Progress Columns (showing daily incremental values) --}}
                             @foreach($calendarDays as $day)
-                                <th class="w-14 min-w-[56px] border border-zinc-400 px-1 py-2 text-center
-                                    {{ $day['isSunday'] ? 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400' : ($day['isWeekend'] ? 'bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400' : 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-300') }}">
-                                    <div class="text-[10px] font-medium">{{ $day['dayName'] }}</div>
-                                    <div class="text-sm font-bold">{{ $day['day'] }}</div>
-                                </th>
+                                @php
+                                    $progress = $task['dailyProgress'][$day['date']] ?? null;
+                                    $hasProgress = $progress !== null;
+                                    $cellBg = $day['isSunday']
+                                        ? 'bg-red-50/50 dark:bg-red-900/10'
+                                        : ($day['isWeekend'] ? 'bg-amber-50/30 dark:bg-amber-900/5' : '');
+
+                                    // Determine color based on daily progress value
+                                    $progressClass = '';
+                                    if ($hasProgress && !$isParent) {
+                                        if ($progress < 0) {
+                                            $progressClass = 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-300';
+                                        } elseif ($progress == 0) {
+                                            $progressClass = 'bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-300';
+                                        } elseif ($progress > 0 && $progress < 5) {
+                                            $progressClass = 'bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-300';
+                                        } elseif ($progress >= 5 && $progress < 10) {
+                                            $progressClass = 'bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-300';
+                                        } elseif ($progress >= 10 && $progress < 20) {
+                                            $progressClass = 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-300';
+                                        } elseif ($progress >= 20 && $progress < 50) {
+                                            $progressClass = 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300';
+                                        } else {
+                                            $progressClass = 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300';
+                                        }
+                                    }
+                                @endphp
+                                <td class="border-r border-neutral-200 px-1 py-2 text-center dark:border-neutral-700 {{ $cellBg }}">
+                                    @if($hasProgress && !$isParent)
+                                        <span class="inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold {{ $progressClass }}">
+                                            {{ number_format($progress, 2) }}
+                                        </span>
+                                    @endif
+                                </td>
                             @endforeach
                         </tr>
-                    </thead>
-                    {{-- Table Body --}}
-                    <tbody>
-                        @forelse($tasksWithProgress as $index => $task)
-                            @php
-                                $isParent = $task['hasChildren'];
-                                $depth = $task['depth'];
-                                $bgClass = $isParent
-                                    ? ($depth === 0 ? 'bg-emerald-50 dark:bg-emerald-900/20' : 'bg-teal-50/50 dark:bg-teal-900/10')
-                                    : ($index % 2 === 0 ? 'bg-white dark:bg-zinc-800' : 'bg-zinc-50 dark:bg-zinc-800/50');
-                            @endphp
-                            <tr class="{{ $bgClass }} hover:bg-yellow-50 dark:hover:bg-yellow-900/20 transition-colors">
-                                {{-- NO Column - Only show sequential number for leaf tasks --}}
-                                <td class="w-12 min-w-[48px] border border-zinc-300 px-2 py-2 text-center font-bold dark:border-zinc-600
-                                    {{ $isParent ? 'bg-emerald-50 dark:bg-emerald-900/20' : ($index % 2 === 0 ? 'bg-white dark:bg-zinc-800' : 'bg-zinc-50 dark:bg-zinc-800/50') }}">
-                                    @if(!$isParent && $task['numbering'])
-                                        <span class="text-zinc-600 dark:text-zinc-400">
-                                            {{ $task['numbering'] }}
-                                        </span>
-                                    @endif
-                                </td>
-                                {{-- URAIAN PEKERJAAN Column --}}
-                                <td class="sticky left-0 z-10 w-[250px] min-w-[250px] border border-zinc-300 px-3 py-2 dark:border-zinc-600
-                                    {{ $isParent ? 'bg-emerald-50 dark:bg-emerald-900/20' : ($index % 2 === 0 ? 'bg-white dark:bg-zinc-800' : 'bg-zinc-50 dark:bg-zinc-800/50') }}"
-                                    style="padding-left: {{ 12 + ($depth * 16) }}px">
-                                    @if($isParent)
-                                        {{-- Parent tasks: show name as-is (already contains Roman numerals like "I. PEKERJAAN PERSIAPAN") --}}
-                                        <span class="font-bold text-emerald-800 dark:text-emerald-300">
-                                            {{ $task['name'] }}
-                                        </span>
-                                    @else
-                                        {{-- Leaf tasks: show with dash prefix --}}
-                                        <div class="flex items-start gap-2">
-                                            <span class="text-zinc-400">-</span>
-                                            <span class="text-zinc-700 dark:text-zinc-300">{{ $task['name'] }}</span>
-                                        </div>
-                                    @endif
-                                </td>
-                                {{-- Daily Progress Columns --}}
-                                @foreach($calendarDays as $day)
-                                    @php
-                                        $progress = $task['dailyProgress'][$day['date']] ?? null;
-                                        $hasProgress = $progress !== null;
-                                        $cellBg = $day['isSunday']
-                                            ? 'bg-red-50/50 dark:bg-red-900/10'
-                                            : ($day['isWeekend'] ? 'bg-amber-50/30 dark:bg-amber-900/5' : '');
-                                    @endphp
-                                    <td class="border border-zinc-300 px-1 py-2 text-center dark:border-zinc-600 {{ $cellBg }}">
-                                        @if($hasProgress && !$isParent)
-                                            <span class="inline-block min-w-[40px] rounded px-1 py-0.5 text-[11px] font-semibold
-                                                {{ $progress >= 100 ? 'bg-emerald-500 text-white' : ($progress >= 75 ? 'bg-teal-400 text-white' : ($progress >= 50 ? 'bg-cyan-400 text-white' : ($progress >= 25 ? 'bg-amber-400 text-zinc-800' : 'bg-zinc-300 text-zinc-700 dark:bg-zinc-600 dark:text-zinc-200'))) }}">
-                                                {{ number_format($progress, 2) }}
-                                            </span>
-                                        @endif
-                                    </td>
-                                @endforeach
-                            </tr>
-                        @empty
-                            <tr>
-                                <td colspan="{{ 2 + count($calendarDays) }}" class="border border-zinc-300 px-4 py-12 text-center text-zinc-500 dark:border-zinc-600 dark:text-zinc-400">
-                                    <div class="flex flex-col items-center">
-                                        <svg class="mb-2 h-8 w-8 text-zinc-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"/>
-                                        </svg>
-                                        <span class="text-sm">Tidak ada data task untuk proyek ini</span>
-                                    </div>
-                                </td>
-                            </tr>
-                        @endforelse
-                    </tbody>
-                </table>
-            </div>
+                    @empty
+                        <tr>
+                            <td colspan="{{ 2 + count($calendarDays) }}" class="px-4 py-12 text-center">
+                                <div class="flex flex-col items-center">
+                                    <svg class="mb-2 h-8 w-8 text-neutral-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"/>
+                                    </svg>
+                                    <span class="text-sm text-neutral-500 dark:text-neutral-400">Tidak ada data task untuk proyek ini</span>
+                                </div>
+                            </td>
+                        </tr>
+                    @endforelse
+                </tbody>
+            </table>
+        </div>
 
-            {{-- Legend --}}
-            <div class="mt-4 rounded-lg border border-zinc-300 bg-white p-4 dark:border-zinc-700 dark:bg-zinc-800">
-                <div class="font-mono text-xs font-bold uppercase tracking-wider text-zinc-600 dark:text-zinc-400">
-                    Keterangan Progress
+        {{-- Legend --}}
+        <div class="rounded-xl border border-neutral-200 bg-white p-4 dark:border-neutral-700 dark:bg-neutral-900">
+            <h3 class="text-sm font-semibold text-neutral-900 dark:text-neutral-100">Keterangan Progress Harian</h3>
+            <div class="mt-3 flex flex-wrap gap-4">
+                <div class="flex items-center gap-2">
+                    <span class="inline-flex h-5 w-12 items-center justify-center rounded-full bg-green-100 text-xs font-medium text-green-800 dark:bg-green-900 dark:text-green-300">50%+</span>
+                    <span class="text-sm text-neutral-600 dark:text-neutral-400">&ge; 50%</span>
                 </div>
-                <div class="mt-3 flex flex-wrap gap-4">
+                <div class="flex items-center gap-2">
+                    <span class="inline-flex h-5 w-12 items-center justify-center rounded-full bg-blue-100 text-xs font-medium text-blue-800 dark:bg-blue-900 dark:text-blue-300">20%+</span>
+                    <span class="text-sm text-neutral-600 dark:text-neutral-400">20-49%</span>
+                </div>
+                <div class="flex items-center gap-2">
+                    <span class="inline-flex h-5 w-12 items-center justify-center rounded-full bg-yellow-100 text-xs font-medium text-yellow-800 dark:bg-yellow-900 dark:text-yellow-300">10%+</span>
+                    <span class="text-sm text-neutral-600 dark:text-neutral-400">10-19%</span>
+                </div>
+                <div class="flex items-center gap-2">
+                    <span class="inline-flex h-5 w-12 items-center justify-center rounded-full bg-orange-100 text-xs font-medium text-orange-800 dark:bg-orange-900 dark:text-orange-300">5%+</span>
+                    <span class="text-sm text-neutral-600 dark:text-neutral-400">5-9%</span>
+                </div>
+                <div class="flex items-center gap-2">
+                    <span class="inline-flex h-5 w-12 items-center justify-center rounded-full bg-gray-100 text-xs font-medium text-gray-800 dark:bg-gray-800 dark:text-gray-300">0%+</span>
+                    <span class="text-sm text-neutral-600 dark:text-neutral-400">0-4%</span>
+                </div>
+                <div class="flex items-center gap-2">
+                    <span class="inline-flex h-5 w-12 items-center justify-center rounded-full bg-red-100 text-xs font-medium text-red-800 dark:bg-red-900 dark:text-red-300">-</span>
+                    <span class="text-sm text-neutral-600 dark:text-neutral-400">Koreksi (negatif)</span>
+                </div>
+            </div>
+            <div class="mt-3 border-t border-neutral-200 pt-3 dark:border-neutral-700">
+                <div class="flex flex-wrap gap-4">
                     <div class="flex items-center gap-2">
-                        <span class="inline-block h-5 w-12 rounded bg-emerald-500"></span>
-                        <span class="font-mono text-xs text-zinc-600 dark:text-zinc-400">100% (Selesai)</span>
+                        <span class="inline-block h-5 w-8 rounded bg-red-50 dark:bg-red-900/20"></span>
+                        <span class="text-sm text-neutral-600 dark:text-neutral-400">Minggu</span>
                     </div>
                     <div class="flex items-center gap-2">
-                        <span class="inline-block h-5 w-12 rounded bg-teal-400"></span>
-                        <span class="font-mono text-xs text-zinc-600 dark:text-zinc-400">75-99%</span>
-                    </div>
-                    <div class="flex items-center gap-2">
-                        <span class="inline-block h-5 w-12 rounded bg-cyan-400"></span>
-                        <span class="font-mono text-xs text-zinc-600 dark:text-zinc-400">50-74%</span>
-                    </div>
-                    <div class="flex items-center gap-2">
-                        <span class="inline-block h-5 w-12 rounded bg-amber-400"></span>
-                        <span class="font-mono text-xs text-zinc-600 dark:text-zinc-400">25-49%</span>
-                    </div>
-                    <div class="flex items-center gap-2">
-                        <span class="inline-block h-5 w-12 rounded bg-zinc-300 dark:bg-zinc-600"></span>
-                        <span class="font-mono text-xs text-zinc-600 dark:text-zinc-400">0-24%</span>
+                        <span class="inline-block h-5 w-8 rounded bg-amber-50 dark:bg-amber-900/20"></span>
+                        <span class="text-sm text-neutral-600 dark:text-neutral-400">Sabtu</span>
                     </div>
                 </div>
-                <div class="mt-3 border-t border-zinc-200 pt-3 dark:border-zinc-700">
-                    <div class="flex flex-wrap gap-4">
-                        <div class="flex items-center gap-2">
-                            <span class="inline-block h-5 w-8 rounded bg-red-100 dark:bg-red-900/40"></span>
-                            <span class="font-mono text-xs text-zinc-600 dark:text-zinc-400">Minggu</span>
-                        </div>
-                        <div class="flex items-center gap-2">
-                            <span class="inline-block h-5 w-8 rounded bg-amber-50 dark:bg-amber-900/30"></span>
-                            <span class="font-mono text-xs text-zinc-600 dark:text-zinc-400">Sabtu</span>
-                        </div>
-                    </div>
-                </div>
+            </div>
+            <div class="mt-3 border-t border-neutral-200 pt-3 text-sm text-neutral-500 dark:border-neutral-700 dark:text-neutral-400">
+                <strong>Catatan:</strong> Nilai yang ditampilkan adalah progress harian (selisih dari hari sebelumnya), bukan nilai kumulatif.
             </div>
         </div>
     @endif

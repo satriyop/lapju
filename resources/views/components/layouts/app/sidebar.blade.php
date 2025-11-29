@@ -18,7 +18,7 @@
                     <flux:navlist.item icon="chart-bar" :href="route('progress.index')" :current="request()->routeIs('progress.index')" wire:navigate>{{ __('Progress') }}</flux:navlist.item>
                     <flux:navlist.item icon="calendar" :href="route('calendar-progress.index')" :current="request()->routeIs('calendar-progress.index')" wire:navigate>{{ __('Calendar Progress') }}</flux:navlist.item>
                     <flux:navlist.item icon="document-chart-bar" :href="route('reports.index')" :current="request()->routeIs('reports.*')" wire:navigate>{{ __('Reports') }}</flux:navlist.item>
-                    <flux:navlist.item icon="table-cells" :href="route('lapjusik.index')" :current="request()->routeIs('lapjusik.*')" wire:navigate>{{ __('Lapjusik Harian') }}</flux:navlist.item>
+                    <flux:navlist.item icon="table-cells" :href="route('lapjusik.index')" :current="request()->routeIs('lapjusik.*')" wire:navigate>{{ __('Lapjusik') }}</flux:navlist.item>
                     <flux:navlist.item icon="map" :href="route('map.index')" :current="request()->routeIs('map.index')" wire:navigate>{{ __('Project Map') }}</flux:navlist.item>
                 </flux:navlist.group>
 

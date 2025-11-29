@@ -290,29 +290,45 @@ class LapjusikExport implements FromArray, ShouldAutoSize, WithColumnWidths, Wit
         return $days;
     }
 
+    /**
+     * Get hierarchical tasks with daily incremental progress data
+     */
     private function getTasksWithProgress(): array
     {
         $tasks = Task::where('project_id', $this->project->id)
+            ->select(['id', 'project_id', 'parent_id', 'name', '_lft', '_rgt'])
             ->orderBy('_lft')
             ->get();
+
+        if ($tasks->isEmpty()) {
+            return [];
+        }
+
+        // Pre-compute which tasks have children
+        $parentIds = $tasks->pluck('parent_id')->filter()->unique()->toArray();
 
         $startOfMonth = Carbon::create($this->year, $this->month, 1)->startOfDay();
         $endOfMonth = $startOfMonth->copy()->endOfMonth()->endOfDay();
 
-        $progressRecords = TaskProgress::where('project_id', $this->project->id)
-            ->whereBetween('progress_date', [$startOfMonth, $endOfMonth])
+        // Get last progress entry BEFORE the month starts for each task (for cross-month calculation)
+        $lastBeforeMonth = TaskProgress::where('project_id', $this->project->id)
+            ->where('progress_date', '<', $startOfMonth)
+            ->select(['task_id', 'percentage', 'progress_date'])
+            ->orderBy('progress_date', 'desc')
             ->get()
-            ->groupBy(function ($progress) {
-                $date = $progress->progress_date;
-                if (is_string($date)) {
-                    return Carbon::parse($date)->format('Y-m-d');
-                }
+            ->unique('task_id')
+            ->keyBy('task_id');
 
-                return $date->format('Y-m-d');
-            })
-            ->map(function ($dateGroup) {
-                return $dateGroup->keyBy('task_id');
-            });
+        // Get all progress entries for the current month
+        $monthProgress = TaskProgress::where('project_id', $this->project->id)
+            ->whereBetween('progress_date', [$startOfMonth, $endOfMonth])
+            ->select(['task_id', 'progress_date', 'percentage'])
+            ->orderBy('progress_date')
+            ->get()
+            ->groupBy('task_id');
+
+        // Index tasks by ID for fast lookup
+        $tasksById = $tasks->keyBy('id');
 
         $result = [];
         $leafCounters = [];
@@ -323,11 +339,12 @@ class LapjusikExport implements FromArray, ShouldAutoSize, WithColumnWidths, Wit
 
             while ($currentId !== null) {
                 $depth++;
-                $parent = $tasks->firstWhere('id', $currentId);
+                $parent = $tasksById[$currentId] ?? null;
                 $currentId = $parent?->parent_id;
             }
 
-            $hasChildren = $task->children()->exists();
+            // Check if task has children using pre-computed parent IDs
+            $hasChildren = in_array($task->id, $parentIds);
 
             $numbering = '';
             if (! $hasChildren && $task->parent_id !== null) {
@@ -338,16 +355,67 @@ class LapjusikExport implements FromArray, ShouldAutoSize, WithColumnWidths, Wit
                 $numbering = (string) $leafCounters[$task->parent_id];
             }
 
+            // Calculate daily incremental progress
             $dailyProgress = [];
-            foreach ($this->calendarDays as $day) {
-                $dateKey = $day['date'];
-                $progress = null;
 
-                if (isset($progressRecords[$dateKey]) && isset($progressRecords[$dateKey][$task->id])) {
-                    $progress = $progressRecords[$dateKey][$task->id]->percentage;
+            // Parent tasks always show blank
+            if ($hasChildren) {
+                foreach ($this->calendarDays as $day) {
+                    $dailyProgress[$day['date']] = null;
                 }
+            } else {
+                // Get task's progress entries for the month
+                $taskMonthProgress = $monthProgress[$task->id] ?? collect();
 
-                $dailyProgress[$dateKey] = $progress;
+                // Index by date for O(1) lookup
+                $progressByDate = $taskMonthProgress->keyBy(function ($p) {
+                    $date = $p->progress_date;
+
+                    return is_string($date) ? Carbon::parse($date)->format('Y-m-d') : $date->format('Y-m-d');
+                });
+
+                // Get the baseline (last entry before this month, or 0)
+                $lastBefore = $lastBeforeMonth[$task->id] ?? null;
+
+                foreach ($this->calendarDays as $day) {
+                    $dateKey = $day['date'];
+
+                    // No entry for this date = blank
+                    if (! isset($progressByDate[$dateKey])) {
+                        $dailyProgress[$dateKey] = null;
+
+                        continue;
+                    }
+
+                    // Get current cumulative percentage (cap at 100%)
+                    $currentPercentage = min(100, (float) $progressByDate[$dateKey]->percentage);
+
+                    // Find previous entry (could be earlier in month OR before month)
+                    $previousPercentage = 0;
+
+                    // Check for earlier entries this month
+                    $previousEntry = $taskMonthProgress
+                        ->filter(function ($p) use ($dateKey) {
+                            $pDate = $p->progress_date;
+                            $pDateStr = is_string($pDate) ? Carbon::parse($pDate)->format('Y-m-d') : $pDate->format('Y-m-d');
+
+                            return $pDateStr < $dateKey;
+                        })
+                        ->sortByDesc(function ($p) {
+                            return is_string($p->progress_date) ? $p->progress_date : $p->progress_date->format('Y-m-d');
+                        })
+                        ->first();
+
+                    if ($previousEntry) {
+                        $previousPercentage = min(100, (float) $previousEntry->percentage);
+                    } elseif ($lastBefore) {
+                        // Use last entry before month as baseline
+                        $previousPercentage = min(100, (float) $lastBefore->percentage);
+                    }
+
+                    // Calculate daily change (can be negative for corrections)
+                    $dailyProgress[$dateKey] = round($currentPercentage - $previousPercentage, 2);
+                }
             }
 
             $result[] = [

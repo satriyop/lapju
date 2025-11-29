@@ -111,7 +111,7 @@ class ProgressSeeder extends Seeder
             $endProgressDate = $today->lt($projectEndDate) ? $today : $projectEndDate;
         }
 
-        // Generate weekly progress entries
+        // Generate daily progress entries
         $currentDate = $startDate->copy();
         $totalDays = $startDate->diffInDays($projectEndDate);
         $progressEntries = [];
@@ -119,6 +119,9 @@ class ProgressSeeder extends Seeder
         $this->command->info("Generating progress from {$startDate->format('Y-m-d')} to {$endProgressDate->format('Y-m-d')}");
 
         $taskCount = $leafTasks->count();
+
+        // Track max progress per task to ensure monotonic increase and 100% cap
+        $taskMaxProgress = [];
 
         while ($currentDate <= $endProgressDate) {
             $daysPassed = $startDate->diffInDays($currentDate);
@@ -131,6 +134,17 @@ class ProgressSeeder extends Seeder
 
                 // Apply S-curve formula with completion multiplier
                 $percentage = $this->calculateSCurvePercentage($adjustedProgress, $index, $taskCount, $completionTarget);
+
+                // Ensure monotonic increase: never go below previous max for this task
+                $taskId = $task->id;
+                $previousMax = $taskMaxProgress[$taskId] ?? 0;
+                $percentage = max($percentage, $previousMax);
+
+                // Cap at 100% absolute maximum
+                $percentage = min(100, $percentage);
+
+                // Update max tracker
+                $taskMaxProgress[$taskId] = $percentage;
 
                 // Only save if there's meaningful progress (> 0)
                 if ($percentage > 0) {
@@ -147,8 +161,8 @@ class ProgressSeeder extends Seeder
                 }
             }
 
-            // Move to next week (to reduce data volume)
-            $currentDate->addWeek();
+            // Move to next day (daily entries for Lapjusik Harian)
+            $currentDate->addDay();
         }
 
         // Insert progress entries in chunks

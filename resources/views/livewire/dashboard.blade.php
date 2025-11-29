@@ -35,11 +35,6 @@ new class extends Component
 
     public ?string $endDate = null;
 
-    // Expandable progress trend state
-    public array $expandedMonths = [];
-
-    public array $expandedWeeks = [];
-
     // Lock filters for Managers to their Kodim coverage
     public bool $filtersLocked = false;
 
@@ -180,30 +175,6 @@ new class extends Component
         $this->selectedProjectId = null;
     }
 
-    public function toggleMonth(string $monthKey): void
-    {
-        if (isset($this->expandedMonths[$monthKey])) {
-            unset($this->expandedMonths[$monthKey]);
-            // Also collapse all weeks in this month
-            foreach (array_keys($this->expandedWeeks) as $weekKey) {
-                if (str_starts_with($weekKey, $monthKey)) {
-                    unset($this->expandedWeeks[$weekKey]);
-                }
-            }
-        } else {
-            $this->expandedMonths[$monthKey] = true;
-        }
-    }
-
-    public function toggleWeek(string $weekKey): void
-    {
-        if (isset($this->expandedWeeks[$weekKey])) {
-            unset($this->expandedWeeks[$weekKey]);
-        } else {
-            $this->expandedWeeks[$weekKey] = true;
-        }
-    }
-
     private function setProjectDates(): void
     {
         if (! $this->selectedProjectId) {
@@ -327,6 +298,7 @@ new class extends Component
         $this->cachedLeafTasks = [];
         $this->cachedBatchProgress = null;
         $this->cachedAllProgress = null;
+        $this->cachedProjectProgress = null; // Clear project progress cache too
     }
 
     /**
@@ -415,14 +387,34 @@ new class extends Component
             return [];
         }
 
+        // OPTIMIZED: For single project view, reuse getCachedProjectProgress() data to avoid duplicate query
+        if (count($projectIds) === 1 && $projectIds[0] == $this->selectedProjectId && $this->cachedProjectProgress !== null) {
+            // Transform the cached project progress data to the grouped array format expected by getProgressAtDate()
+            $grouped = [];
+            foreach ($this->cachedProjectProgress as $progress) {
+                $key = "{$progress->project_id}_{$progress->task_id}";
+                if (! isset($grouped[$key])) {
+                    $grouped[$key] = [];
+                }
+                $grouped[$key][] = $progress;
+            }
+            $this->cachedAllProgress = $grouped;
+
+            return $this->cachedAllProgress;
+        }
+
         // Only load progress within the organization's date range (not ALL history)
         $settings = $this->getCachedSettings();
         $startDate = $settings['start_date'];
         $endDate = $settings['end_date'];
 
-        // Load progress records within date range, grouped by project_id, task_id, progress_date
+        // FIXED: Load progress records ONLY for LEAF tasks (where actual work happens)
+        // Parent task progress should not be included in calculations
         $allProgress = TaskProgress::whereIn('project_id', $projectIds)
             ->whereBetween('progress_date', [$startDate, $endDate])
+            ->whereHas('task', function ($query) {
+                $query->whereDoesntHave('children');  // Only leaf tasks
+            })
             ->select('task_id', 'project_id', 'percentage', 'progress_date')
             ->orderBy('progress_date', 'desc')
             ->get();
@@ -454,10 +446,18 @@ new class extends Component
             return null;
         }
 
-        // Find the latest progress on or before the given date
-        foreach ($allProgress[$key] as $progress) {
-            if ($progress->progress_date <= $date) {
-                return $progress;
+        // FIXED: Find the latest progress on or before the given date
+        // Data is sorted DESC (newest first), so we iterate BACKWARDS to find the
+        // latest progress that is <= the target date
+        $progressRecords = $allProgress[$key];
+        for ($i = count($progressRecords) - 1; $i >= 0; $i--) {
+            // Ensure both dates are strings for proper comparison
+            $progressDate = is_string($progressRecords[$i]->progress_date)
+                ? $progressRecords[$i]->progress_date
+                : $progressRecords[$i]->progress_date->format('Y-m-d');
+
+            if ($progressDate <= $date) {
+                return $progressRecords[$i];
             }
         }
 
@@ -490,7 +490,8 @@ new class extends Component
     private function getCachedLeafTasks($projectId)
     {
         if (! isset($this->cachedLeafTasks[$projectId])) {
-            $this->cachedLeafTasks[$projectId] = Task::select('id', 'weight')
+            // FIXED: Load with same structure as batch load for consistency
+            $this->cachedLeafTasks[$projectId] = Task::select('id', 'project_id', 'weight')
                 ->where('project_id', $projectId)
                 ->whereDoesntHave('children')
                 ->get();
@@ -516,12 +517,25 @@ new class extends Component
     /**
      * Get cached TaskProgress for selected project
      * OPTIMIZED: Load once and reuse for both hierarchical view and task breakdown
+     * FIXED: Use organization-wide date range for consistency with S-curve calculations
      */
     private function getCachedProjectProgress()
     {
-        if ($this->cachedProjectProgress === null && $this->selectedProjectId && $this->startDate && $this->endDate) {
+        if ($this->cachedProjectProgress === null && $this->selectedProjectId) {
+            // FIXED: Use organization-wide date range (same as loadAllProgressData and S-curve)
+            // This ensures consistent data loading across all calculations
+            $settings = $this->getCachedSettings();
+            $startDate = $settings['start_date'];
+            $endDate = $settings['end_date'];
+
+            // FIXED: Only load progress for LEAF tasks (tasks without children) to avoid double-counting
+            // Parent task progress should not be included in weighted averages
             $this->cachedProjectProgress = TaskProgress::where('project_id', $this->selectedProjectId)
-                ->whereBetween('progress_date', [$this->startDate, $this->endDate])
+                ->whereBetween('progress_date', [$startDate, $endDate])
+                ->whereHas('task', function ($query) {
+                    // Only include tasks that don't have children (leaf tasks)
+                    $query->whereDoesntHave('children');
+                })
                 ->select('id', 'task_id', 'project_id', 'percentage', 'progress_date', 'notes')
                 ->with(['task' => function ($query) {
                     $query->select('id', 'project_id', 'parent_id', 'name', 'weight');
@@ -538,13 +552,24 @@ new class extends Component
      */
     private function batchLoadAllLeafTasks(array $projectIds): void
     {
-        if (empty($projectIds) || ! empty($this->cachedLeafTasks)) {
+        if (empty($projectIds)) {
             return;
         }
 
+        // FIXED: Only skip if we already have ALL required projects cached
+        // Check which projects are missing from cache
+        $missingProjectIds = array_diff($projectIds, array_keys($this->cachedLeafTasks));
+
+        if (empty($missingProjectIds)) {
+            // All projects already cached, nothing to do
+            return;
+        }
+
+        // Load only the missing projects (or all if cache is empty)
+        // FIXED: Load only LEAF tasks (tasks without children) since progress is entered there
         $allLeafTasks = Task::select('id', 'project_id', 'weight')
-            ->whereIn('project_id', $projectIds)
-            ->whereDoesntHave('children')
+            ->whereIn('project_id', $missingProjectIds)
+            ->whereDoesntHave('children')  // Only leaf tasks have progress data
             ->get()
             ->groupBy('project_id');
 
@@ -628,8 +653,9 @@ new class extends Component
 
     public function calculateSCurveData(): array
     {
+        // Only calculate S-curve when a project is selected
         if (! $this->selectedProjectId) {
-            return $this->calculateAggregatedSCurveData();
+            return ['labels' => [], 'planned' => [], 'actual' => []];
         }
 
         return $this->calculateSingleProjectSCurve();
@@ -700,8 +726,10 @@ new class extends Component
             $currentDate->addDays($intervalDays);
         }
 
-        // Ensure we have the end date
-        if ($currentDate->subDays($intervalDays) < $projectEndDate) {
+        // Ensure we have the end date at 100% planned progress
+        // FIXED: Use copy() to avoid mutating $currentDate, and use <= to include end date
+        $lastIterationDate = $currentDate->copy()->subDays($intervalDays);
+        if ($lastIterationDate <= $projectEndDate) {
             $labels[] = $projectEndDate->format('M d');
             $plannedData[] = 100;
 
@@ -723,176 +751,6 @@ new class extends Component
             'actualStartDate' => $projectStartDate->format('M d, Y'),
             'plannedStartDate' => $organizationStartDate->format('M d, Y'),
         ];
-    }
-
-    private function calculateAggregatedSCurveData(): array
-    {
-        // Get all filtered projects (cached)
-        $projects = $this->getCachedFilteredProjects();
-
-        if ($projects->isEmpty()) {
-            return [
-                'labels' => [],
-                'planned' => [],
-                'actual' => [],
-                'delayDays' => 0,
-                'projectCount' => 0,
-            ];
-        }
-
-        // Use organizational default dates for consistent timeline
-        $settings = $this->getCachedSettings();
-        $organizationStartDate = Carbon::parse($settings['start_date']);
-        $organizationEndDate = Carbon::parse($settings['end_date']);
-
-        // Calculate total days
-        $totalDays = $organizationStartDate->diffInDays($organizationEndDate);
-
-        if ($totalDays <= 0) {
-            return [
-                'labels' => [],
-                'planned' => [],
-                'actual' => [],
-                'delayDays' => 0,
-                'projectCount' => $projects->count(),
-            ];
-        }
-
-        // Determine interval based on duration
-        $intervalDays = $totalDays <= 30 ? 1 : ($totalDays <= 90 ? 7 : 14);
-
-        $labels = [];
-        $plannedData = [];
-        $actualData = [];
-
-        // OPTIMIZATION: Load ALL progress data ONCE for all date calculations
-        $projectIds = $projects->pluck('id')->toArray();
-        $allProgress = $this->loadAllProgressData($projectIds);
-
-        $currentDate = $organizationStartDate->copy();
-
-        while ($currentDate <= $organizationEndDate) {
-            $daysPassed = $organizationStartDate->diffInDays($currentDate);
-            $labels[] = $currentDate->format('M d');
-
-            // Planned: Simple linear progression (same for all projects)
-            $plannedPercentage = min(($daysPassed / $totalDays) * 100, 100);
-            $plannedData[] = round($plannedPercentage, 2);
-
-            // Actual: Calculate average across all projects using in-memory data
-            $totalProgress = 0;
-            $validProjects = 0;
-            $dateStr = $currentDate->format('Y-m-d');
-
-            foreach ($projects as $project) {
-                // Check if project has started by this date
-                if ($project->start_date && $currentDate->lt(Carbon::parse($project->start_date))) {
-                    // Project hasn't started yet, counts as 0%
-                    $validProjects++;
-                } else {
-                    // Calculate this project's progress at this date using in-memory data
-                    $projectProgress = $this->calculateProjectProgressAtDateFromMemory($project, $dateStr, $allProgress);
-                    $totalProgress += $projectProgress;
-                    $validProjects++;
-                }
-            }
-
-            $averageProgress = $validProjects > 0 ? $totalProgress / $validProjects : 0;
-            $actualData[] = round($averageProgress, 2);
-
-            $currentDate->addDays($intervalDays);
-        }
-
-        // Ensure we have the end date
-        if ($currentDate->subDays($intervalDays) < $organizationEndDate) {
-            $labels[] = $organizationEndDate->format('M d');
-            $plannedData[] = 100;
-
-            // Calculate final average progress using in-memory data
-            $totalProgress = 0;
-            $validProjects = 0;
-            $dateStr = $organizationEndDate->format('Y-m-d');
-
-            foreach ($projects as $project) {
-                $projectProgress = $this->calculateProjectProgressAtDateFromMemory($project, $dateStr, $allProgress);
-                $totalProgress += $projectProgress;
-                $validProjects++;
-            }
-
-            $averageProgress = $validProjects > 0 ? $totalProgress / $validProjects : 0;
-            $actualData[] = round($averageProgress, 2);
-        }
-
-        return [
-            'labels' => $labels,
-            'planned' => $plannedData,
-            'actual' => $actualData,
-            'delayDays' => 0, // Will calculate average delay separately
-            'projectCount' => $projects->count(),
-        ];
-    }
-
-    /**
-     * Calculate project progress at a specific date using in-memory data (NO DB QUERIES)
-     */
-    private function calculateProjectProgressAtDateFromMemory(Project $project, string $dateStr, array $allProgress): float
-    {
-        $leafTasks = $this->getCachedLeafTasks($project->id);
-
-        if ($leafTasks->isEmpty()) {
-            return 0;
-        }
-
-        $totalWeight = $leafTasks->sum('weight');
-
-        if ($totalWeight == 0) {
-            return 0;
-        }
-
-        $totalWeightedProgress = 0;
-
-        foreach ($leafTasks as $task) {
-            $latestProgress = $this->getProgressAtDate($allProgress, $project->id, $task->id, $dateStr);
-
-            if ($latestProgress) {
-                $taskPercentage = min((float) $latestProgress->percentage, 100);
-                $totalWeightedProgress += ($taskPercentage * $task->weight) / $totalWeight;
-            }
-        }
-
-        return $totalWeightedProgress;
-    }
-
-    private function calculateProjectProgressAtDate(Project $project, Carbon $date, $preloadedProgress = null): float
-    {
-        // OPTIMIZATION: Use cached leaf tasks instead of querying every time
-        $leafTasks = $this->getCachedLeafTasks($project->id);
-
-        if ($leafTasks->isEmpty()) {
-            return 0;
-        }
-
-        $totalWeight = $leafTasks->sum('weight');
-
-        if ($totalWeight == 0) {
-            return 0;
-        }
-
-        $totalWeightedProgress = 0;
-
-        foreach ($leafTasks as $task) {
-            // Use pre-loaded progress - NO FALLBACK QUERY (tasks without progress = 0%)
-            $progressKey = "{$project->id}_{$task->id}";
-            $latestProgress = $preloadedProgress[$progressKey] ?? null;
-
-            if ($latestProgress) {
-                $taskPercentage = min((float) $latestProgress->percentage, 100);
-                $totalWeightedProgress += ($taskPercentage * $task->weight) / $totalWeight;
-            }
-            // Tasks without progress contribute 0% (no query needed)
-        }
-
-        return $totalWeightedProgress;
     }
 
     private function calculateActualProgress(Carbon $date): float
@@ -993,146 +851,6 @@ new class extends Component
         usort($projectsWithProgress, fn ($a, $b) => $b['progress'] <=> $a['progress']);
 
         return array_slice($projectsWithProgress, 0, 10);
-    }
-
-    private function getAggregatedOverallProgress(): float
-    {
-        $projects = $this->getCachedFilteredProjects();
-
-        if ($projects->isEmpty()) {
-            return 0;
-        }
-
-        // OPTIMIZATION: Use cached batch progress instead of loading fresh
-        $preloadedProgress = $this->getCachedBatchProgress();
-
-        $totalProgress = 0;
-
-        foreach ($projects as $project) {
-            $totalProgress += $this->calculateProjectActualProgress($project, $preloadedProgress);
-        }
-
-        return round($totalProgress / $projects->count(), 2);
-    }
-
-    private function getProjectsOnTrackCount(): int
-    {
-        $projects = $this->getCachedFilteredProjects();
-
-        if ($projects->isEmpty()) {
-            return 0;
-        }
-
-        // OPTIMIZATION: Use cached batch progress instead of loading fresh
-        $preloadedProgress = $this->getCachedBatchProgress();
-
-        $settings = $this->getCachedSettings();
-        $organizationStartDate = Carbon::parse($settings['start_date']);
-        $organizationEndDate = Carbon::parse($settings['end_date']);
-        $totalDays = $organizationStartDate->diffInDays($organizationEndDate);
-        $today = Carbon::now();
-        $daysPassed = $organizationStartDate->diffInDays($today);
-        $plannedPercentage = min(($daysPassed / $totalDays) * 100, 100);
-
-        $onTrackCount = 0;
-
-        foreach ($projects as $project) {
-            $actualProgress = $this->calculateProjectActualProgress($project, $preloadedProgress);
-            if ($actualProgress >= $plannedPercentage) {
-                $onTrackCount++;
-            }
-        }
-
-        return $onTrackCount;
-    }
-
-    private function getProjectsBehindCount(): int
-    {
-        $projects = $this->getCachedFilteredProjects();
-
-        if ($projects->isEmpty()) {
-            return 0;
-        }
-
-        // OPTIMIZATION: Use cached batch progress instead of loading fresh
-        $preloadedProgress = $this->getCachedBatchProgress();
-
-        $settings = $this->getCachedSettings();
-        $organizationStartDate = Carbon::parse($settings['start_date']);
-        $organizationEndDate = Carbon::parse($settings['end_date']);
-        $totalDays = $organizationStartDate->diffInDays($organizationEndDate);
-        $today = Carbon::now();
-        $daysPassed = $organizationStartDate->diffInDays($today);
-        $plannedPercentage = min(($daysPassed / $totalDays) * 100, 100);
-
-        $behindCount = 0;
-
-        foreach ($projects as $project) {
-            $actualProgress = $this->calculateProjectActualProgress($project, $preloadedProgress);
-            if ($actualProgress < $plannedPercentage) {
-                $behindCount++;
-            }
-        }
-
-        return $behindCount;
-    }
-
-    private function getAverageDelayDays(): int
-    {
-        $projects = $this->getCachedFilteredProjects();
-
-        if ($projects->isEmpty()) {
-            return 0;
-        }
-
-        $totalDelay = 0;
-        $projectsWithDelay = 0;
-
-        $organizationStartDate = Carbon::parse(Setting::get('project.default_start_date', '2025-11-01'));
-
-        foreach ($projects as $project) {
-            if ($project->start_date) {
-                $actualStartDate = Carbon::parse($project->start_date);
-                $delay = $organizationStartDate->diffInDays($actualStartDate);
-                if ($delay > 0) {
-                    $totalDelay += $delay;
-                    $projectsWithDelay++;
-                }
-            }
-        }
-
-        return $projectsWithDelay > 0 ? round($totalDelay / $projectsWithDelay) : 0;
-    }
-
-    private function getProgressDistribution(): array
-    {
-        $projects = $this->getCachedFilteredProjects();
-
-        // OPTIMIZATION: Use cached batch progress instead of loading fresh
-        $preloadedProgress = $this->getCachedBatchProgress();
-
-        $distribution = [
-            '0-25' => 0,
-            '25-50' => 0,
-            '50-75' => 0,
-            '75-100' => 0,
-        ];
-
-        foreach ($projects as $project) {
-            $progress = $this->calculateProjectActualProgress($project, $preloadedProgress);
-
-            if ($progress < 25) {
-                $distribution['0-25']++;
-            } elseif ($progress < 50) {
-                $distribution['25-50']++;
-            } elseif ($progress < 75) {
-                $distribution['50-75']++;
-            } else {
-                $distribution['75-100']++;
-            }
-        }
-
-        return $distribution;
     }
 
     /**
@@ -1269,100 +987,6 @@ new class extends Component
         return $distribution;
     }
 
-    private function calculateHierarchicalProgress(): array
-    {
-        if (! $this->selectedProjectId || ! $this->startDate || ! $this->endDate) {
-            return [];
-        }
-
-        // OPTIMIZED: Use cached project progress data instead of separate query
-        $allProgressData = $this->getCachedProjectProgress();
-
-        // Group by date and calculate daily aggregates in memory
-        $dailyData = $allProgressData->groupBy('progress_date')
-            ->map(function ($dayProgress, $date) {
-                return (object) [
-                    'progress_date' => $date,
-                    'avg_percentage' => $dayProgress->avg('percentage'),
-                    'task_count' => $dayProgress->unique('task_id')->count(),
-                ];
-            })
-            ->sortBy('progress_date')
-            ->values();
-
-        $hierarchical = [];
-
-        foreach ($dailyData as $day) {
-            $date = Carbon::parse($day->progress_date);
-            $monthKey = $date->format('Y-m');
-            $monthName = $date->format('F Y');
-            // Calculate week number: divide month into exactly 4 weeks
-            $daysInMonth = $date->daysInMonth;
-            $weekNumber = min(4, (int) ceil(($date->day / $daysInMonth) * 4));
-            $weekKey = $monthKey.'-W'.$weekNumber;
-            $weekName = 'Week '.$weekNumber;
-
-            // Initialize month if not exists
-            if (! isset($hierarchical[$monthKey])) {
-                $hierarchical[$monthKey] = [
-                    'key' => $monthKey,
-                    'name' => $monthName,
-                    'start_date' => $date->copy()->startOfMonth(),
-                    'end_date' => $date->copy()->endOfMonth(),
-                    'avg_percentage' => 0,
-                    'task_count' => 0,
-                    'day_count' => 0,
-                    'weeks' => [],
-                ];
-            }
-
-            // Initialize week if not exists
-            if (! isset($hierarchical[$monthKey]['weeks'][$weekKey])) {
-                $hierarchical[$monthKey]['weeks'][$weekKey] = [
-                    'key' => $weekKey,
-                    'name' => $weekName,
-                    'avg_percentage' => 0,
-                    'task_count' => 0,
-                    'day_count' => 0,
-                    'days' => [],
-                ];
-            }
-
-            // Add day data
-            $hierarchical[$monthKey]['weeks'][$weekKey]['days'][] = [
-                'date' => $date,
-                'formatted_date' => $date->format('M d, Y'),
-                'avg_percentage' => (float) $day->avg_percentage,
-                'task_count' => (int) $day->task_count,
-            ];
-
-            // Update week aggregates
-            $hierarchical[$monthKey]['weeks'][$weekKey]['day_count']++;
-            $hierarchical[$monthKey]['weeks'][$weekKey]['avg_percentage'] += (float) $day->avg_percentage;
-            $hierarchical[$monthKey]['weeks'][$weekKey]['task_count'] += (int) $day->task_count;
-
-            // Update month aggregates
-            $hierarchical[$monthKey]['day_count']++;
-            $hierarchical[$monthKey]['avg_percentage'] += (float) $day->avg_percentage;
-            $hierarchical[$monthKey]['task_count'] += (int) $day->task_count;
-        }
-
-        // Calculate averages
-        foreach ($hierarchical as $monthKey => $month) {
-            if ($month['day_count'] > 0) {
-                $hierarchical[$monthKey]['avg_percentage'] = round($month['avg_percentage'] / $month['day_count'], 1);
-            }
-
-            foreach ($month['weeks'] as $weekKey => $week) {
-                if ($week['day_count'] > 0) {
-                    $hierarchical[$monthKey]['weeks'][$weekKey]['avg_percentage'] = round($week['avg_percentage'] / $week['day_count'], 1);
-                }
-            }
-        }
-
-        return $hierarchical;
-    }
-
     public function with(): array
     {
         $projects = $this->getCachedFilteredProjects();
@@ -1370,11 +994,16 @@ new class extends Component
 
         // PRE-LOAD ALL CACHES ONCE to eliminate N+1 queries
         // OPTIMIZED: Only batch load when viewing ALL projects (aggregated view)
-        // When a specific project is selected, we use getCachedProjectProgress() instead
-        if (! $this->selectedProjectId) {
+        // When a specific project is selected, load only that project's data
+        if (empty($this->selectedProjectId)) {
+            // Aggregated view: load data for all filtered projects
             $this->batchLoadAllLeafTasks($projectIds);
             $this->getCachedBatchProgress();
-            $this->loadAllProgressData($projectIds); // For S-curve historical lookups
+        } else {
+            // Single project view: load project progress ONCE (shared by hierarchical view, task breakdown, and S-curve)
+            $this->batchLoadAllLeafTasks([$this->selectedProjectId]);
+            $this->getCachedProjectProgress(); // Loads TaskProgress with eager loaded tasks
+            $this->loadAllProgressData([$this->selectedProjectId]); // Will reuse the above data, just transforms format
         }
 
         $locations = $this->getFilteredLocations();
@@ -1443,15 +1072,24 @@ new class extends Component
         ];
 
         // PRE-COMPUTE all statistics using cached data (eliminates Blade method calls)
-        $preloadedProgress = $this->getCachedBatchProgress();
-        $aggregatedOverallProgress = $this->calculateAggregatedOverallProgressWithData($projects, $preloadedProgress);
-        $projectsOnTrackCount = $this->calculateProjectsOnTrackWithData($projects, $preloadedProgress);
-        $projectsBehindCount = $this->calculateProjectsBehindWithData($projects, $preloadedProgress);
-        $averageDelayDays = $this->calculateAverageDelayDays($projects);
-        $progressDistribution = $this->calculateProgressDistributionWithData($projects, $preloadedProgress);
-
-        // Get top 10 projects with best actual progress (always show, not dependent on selected project)
-        $top10Projects = $this->getTop10Projects();
+        // OPTIMIZED: Only compute aggregated stats when viewing all projects
+        if (empty($this->selectedProjectId)) {
+            $preloadedProgress = $this->getCachedBatchProgress();
+            $aggregatedOverallProgress = $this->calculateAggregatedOverallProgressWithData($projects, $preloadedProgress);
+            $projectsOnTrackCount = $this->calculateProjectsOnTrackWithData($projects, $preloadedProgress);
+            $projectsBehindCount = $this->calculateProjectsBehindWithData($projects, $preloadedProgress);
+            $averageDelayDays = $this->calculateAverageDelayDays($projects);
+            $progressDistribution = $this->calculateProgressDistributionWithData($projects, $preloadedProgress);
+            $top10Projects = $this->getTop10Projects();
+        } else {
+            // When project selected, set empty defaults for aggregated stats
+            $aggregatedOverallProgress = 0;
+            $projectsOnTrackCount = 0;
+            $projectsBehindCount = 0;
+            $averageDelayDays = 0;
+            $progressDistribution = [];
+            $top10Projects = [];
+        }
 
         // Calculate S-curve data (works for both single project and aggregated views)
         $sCurveData = $this->calculateSCurveData();
@@ -1468,7 +1106,6 @@ new class extends Component
                 'stats' => $stats,
                 'taskProgress' => collect(),
                 'taskProgressByRoot' => [],
-                'hierarchicalProgress' => [],
                 'sCurveData' => $sCurveData,
                 'tasksWithoutProgress' => [],
                 'top10Projects' => $top10Projects,
@@ -1492,7 +1129,6 @@ new class extends Component
                 'stats' => $stats,
                 'taskProgress' => collect(),
                 'taskProgressByRoot' => [],
-                'hierarchicalProgress' => [],
                 'sCurveData' => $sCurveData,
                 'tasksWithoutProgress' => [],
                 'top10Projects' => $top10Projects,
@@ -1532,9 +1168,6 @@ new class extends Component
         // Group task progress by root task
         $taskProgressByRoot = $this->groupTasksByRoot($taskProgress);
 
-        // Calculate hierarchical progress (month -> week -> day)
-        $hierarchicalProgress = $this->calculateHierarchicalProgress();
-
         // Get tasks without progress for selected project
         $tasksWithoutProgress = $this->getTasksWithoutProgress();
 
@@ -1548,7 +1181,6 @@ new class extends Component
             'stats' => $stats,
             'taskProgress' => $taskProgress,
             'taskProgressByRoot' => $taskProgressByRoot,
-            'hierarchicalProgress' => $hierarchicalProgress,
             'sCurveData' => $sCurveData,
             'tasksWithoutProgress' => $tasksWithoutProgress,
             'top10Projects' => $top10Projects,
@@ -1582,22 +1214,27 @@ new class extends Component
 
     private function getTasksWithoutProgress(): array
     {
-        if (! $this->selectedProjectId || ! $this->startDate || ! $this->endDate) {
+        if (! $this->selectedProjectId) {
             return [];
         }
+
+        // FIXED: Use organization-wide date range for consistency with all other calculations
+        $settings = $this->getCachedSettings();
+        $startDate = $settings['start_date'];
+        $endDate = $settings['end_date'];
 
         // OPTIMIZATION: Preload all project tasks with parent hierarchy
         $tasks = $this->preloadProjectTasks($this->selectedProjectId);
 
-        // Get all leaf tasks for the selected project
-        $leafTasks = Task::where('project_id', $this->selectedProjectId)
-            ->whereDoesntHave('children')
-            ->orderBy('_lft')
-            ->get();
+        // OPTIMIZED: Get leaf tasks from already preloaded tasks (no separate query)
+        $leafTasks = $tasks->filter(function ($task) use ($tasks) {
+            // A task is a leaf if no other task has it as a parent
+            return ! $tasks->contains('parent_id', $task->id);
+        })->sortBy('_lft')->values();
 
-        // Get task IDs that have progress within the selected date range
+        // Get task IDs that have progress within the organization date range
         $taskIdsWithProgress = TaskProgress::where('project_id', $this->selectedProjectId)
-            ->whereBetween('progress_date', [$this->startDate, $this->endDate])
+            ->whereBetween('progress_date', [$startDate, $endDate])
             ->distinct()
             ->pluck('task_id')
             ->toArray();
@@ -1796,8 +1433,8 @@ new class extends Component
             </flux:select>
         </div>
 
-        @if($stats)
-            <!-- All Statistics Cards (Always Visible) -->
+        @if($stats && empty($selectedProjectId))
+            <!-- Aggregated Statistics Cards (Only shown when viewing all projects) -->
             <!-- Row 2: Resource Metrics -->
             <div class="grid gap-4 md:grid-cols-4">
                 <div class="rounded-xl border border-neutral-200 bg-white p-6 dark:border-neutral-700 dark:bg-neutral-900">
@@ -1871,22 +1508,11 @@ new class extends Component
 
         @endif
 
-        <!-- S-Curve Chart -->
-        @if(!empty($sCurveData['labels']))
+        <!-- S-Curve Chart (Single Project Only) -->
+        @if($selectedProjectId && !empty($sCurveData['labels']))
                 <div class="rounded-xl border border-neutral-200 bg-white p-6 dark:border-neutral-700 dark:bg-neutral-900" wire:key="scurve-{{ $selectedProjectId }}-{{ md5(json_encode($sCurveData)) }}">
-                    <div class="mb-4 flex items-center justify-between">
-                        <flux:heading size="lg">
-                            @if($selectedProjectId)
-                                S-Curve Progress
-                            @else
-                                All Projects Summary - S-Curve Progress
-                            @endif
-                        </flux:heading>
-                        @if(!$selectedProjectId && isset($sCurveData['projectCount']))
-                            <flux:badge color="blue" size="sm">
-                                {{ $sCurveData['projectCount'] }} {{ Str::plural('project', $sCurveData['projectCount']) }}
-                            </flux:badge>
-                        @endif
+                    <div class="mb-4">
+                        <flux:heading size="lg">S-Curve Progress</flux:heading>
                     </div>
 
                     @if($sCurveData && isset($sCurveData['delayDays']) && $sCurveData['delayDays'] > 0)
@@ -2143,7 +1769,8 @@ new class extends Component
             @endif
         @endif
 
-        <!-- Top 10 Projects with Best Actual Progress -->
+        <!-- Top 10 Projects with Best Actual Progress (Only shown when viewing all projects) -->
+        @if(empty($selectedProjectId))
         <div class="rounded-xl border border-neutral-200 bg-white dark:border-neutral-700 dark:bg-neutral-900">
             <div class="border-b border-neutral-200 p-6 dark:border-neutral-700">
                 <flux:heading size="lg">Top 10 Projects with Best Actual Progress</flux:heading>
@@ -2229,129 +1856,9 @@ new class extends Component
                 @endif
             </div>
         </div>
+        @endif
 
         @if($selectedProjectId)
-            <!-- Hierarchical Progress Trend (Monthly -> Weekly -> Daily) -->
-            @if(!empty($hierarchicalProgress))
-                <div class="rounded-xl border border-neutral-200 bg-white p-6 dark:border-neutral-700 dark:bg-neutral-900">
-                    <flux:heading size="lg" class="mb-4">Progress Trend</flux:heading>
-                    <div class="space-y-3">
-                        @foreach($hierarchicalProgress as $month)
-                            <div class="overflow-hidden rounded-lg border border-neutral-200 dark:border-neutral-700">
-                                <!-- Month Header (Clickable) -->
-                                <button
-                                    wire:click="toggleMonth('{{ $month['key'] }}')"
-                                    class="flex w-full items-center justify-between bg-neutral-100 p-4 text-left transition-colors hover:bg-neutral-200 dark:bg-neutral-800 dark:hover:bg-neutral-700"
-                                >
-                                    <div class="flex items-center gap-3">
-                                        <svg
-                                            class="h-5 w-5 transform text-neutral-500 transition-transform duration-200 dark:text-neutral-400 {{ isset($this->expandedMonths[$month['key']]) ? 'rotate-90' : '' }}"
-                                            fill="none"
-                                            stroke="currentColor"
-                                            viewBox="0 0 24 24"
-                                        >
-                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
-                                        </svg>
-                                        <div>
-                                            <div class="font-semibold text-neutral-900 dark:text-neutral-100">
-                                                {{ $month['name'] }}
-                                            </div>
-                                            <div class="text-sm text-neutral-600 dark:text-neutral-400">
-                                                {{ $month['day_count'] }} {{ Str::plural('day', $month['day_count']) }} with data
-                                            </div>
-                                        </div>
-                                    </div>
-                                    <div class="flex items-center gap-4">
-                                        <span class="text-sm font-medium text-neutral-600 dark:text-neutral-400">
-                                            {{ number_format($month['avg_percentage'], 1) }}%
-                                        </span>
-                                        <div class="h-3 w-32 overflow-hidden rounded-full bg-neutral-200 dark:bg-neutral-700">
-                                            <div
-                                                class="h-full rounded-full bg-gradient-to-r from-blue-500 to-green-500 transition-all"
-                                                style="width: {{ min($month['avg_percentage'], 100) }}%"
-                                            ></div>
-                                        </div>
-                                    </div>
-                                </button>
-
-                                <!-- Week Content (Expandable) -->
-                                @if(isset($this->expandedMonths[$month['key']]))
-                                    <div class="border-t border-neutral-200 bg-white p-4 dark:border-neutral-700 dark:bg-neutral-900">
-                                        <div class="space-y-2">
-                                            @foreach($month['weeks'] as $week)
-                                                <div class="overflow-hidden rounded-lg border border-neutral-200 dark:border-neutral-600">
-                                                    <!-- Week Header (Clickable) -->
-                                                    <button
-                                                        wire:click="toggleWeek('{{ $week['key'] }}')"
-                                                        class="flex w-full items-center justify-between bg-neutral-50 p-3 text-left transition-colors hover:bg-neutral-100 dark:bg-neutral-800 dark:hover:bg-neutral-700"
-                                                    >
-                                                        <div class="flex items-center gap-2">
-                                                            <svg
-                                                                class="h-4 w-4 transform text-neutral-500 transition-transform duration-200 dark:text-neutral-400 {{ isset($this->expandedWeeks[$week['key']]) ? 'rotate-90' : '' }}"
-                                                                fill="none"
-                                                                stroke="currentColor"
-                                                                viewBox="0 0 24 24"
-                                                            >
-                                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
-                                                            </svg>
-                                                            <div>
-                                                                <div class="font-medium text-neutral-900 dark:text-neutral-100">
-                                                                    {{ $week['name'] }}
-                                                                </div>
-                                                                <div class="text-xs text-neutral-500 dark:text-neutral-400">
-                                                                    {{ $week['day_count'] }} {{ Str::plural('day', $week['day_count']) }}
-                                                                </div>
-                                                            </div>
-                                                        </div>
-                                                        <div class="flex items-center gap-3">
-                                                            <span class="text-sm font-medium text-neutral-600 dark:text-neutral-400">
-                                                                {{ number_format($week['avg_percentage'], 1) }}%
-                                                            </span>
-                                                            <div class="h-2 w-24 overflow-hidden rounded-full bg-neutral-200 dark:bg-neutral-700">
-                                                                <div
-                                                                    class="h-full rounded-full bg-gradient-to-r from-blue-500 to-green-500 transition-all"
-                                                                    style="width: {{ min($week['avg_percentage'], 100) }}%"
-                                                                ></div>
-                                                            </div>
-                                                        </div>
-                                                    </button>
-
-                                                    <!-- Day Content (Expandable) -->
-                                                    @if(isset($this->expandedWeeks[$week['key']]))
-                                                        <div class="border-t border-neutral-200 bg-neutral-50 p-3 dark:border-neutral-600 dark:bg-neutral-800">
-                                                            <div class="space-y-2">
-                                                                @foreach($week['days'] as $day)
-                                                                    <div class="flex items-center justify-between rounded bg-white p-2 dark:bg-neutral-900">
-                                                                        <span class="text-sm font-medium text-neutral-900 dark:text-neutral-100">
-                                                                            {{ $day['formatted_date'] }}
-                                                                        </span>
-                                                                        <div class="flex items-center gap-3">
-                                                                            <span class="text-sm text-neutral-600 dark:text-neutral-400">
-                                                                                {{ number_format($day['avg_percentage'], 1) }}% ({{ $day['task_count'] }} tasks)
-                                                                            </span>
-                                                                            <div class="h-2 w-20 overflow-hidden rounded-full bg-neutral-200 dark:bg-neutral-700">
-                                                                                <div
-                                                                                    class="h-full rounded-full bg-gradient-to-r from-blue-500 to-green-500 transition-all"
-                                                                                    style="width: {{ min($day['avg_percentage'], 100) }}%"
-                                                                                ></div>
-                                                                            </div>
-                                                                        </div>
-                                                                    </div>
-                                                                @endforeach
-                                                            </div>
-                                                        </div>
-                                                    @endif
-                                                </div>
-                                            @endforeach
-                                        </div>
-                                    </div>
-                                @endif
-                            </div>
-                        @endforeach
-                    </div>
-                </div>
-            @endif
-
             <!-- Tasks Without Progress -->
             @if(!empty($tasksWithoutProgress))
                 <div class="rounded-xl border border-amber-200 bg-amber-50 dark:border-amber-900 dark:bg-amber-950">
