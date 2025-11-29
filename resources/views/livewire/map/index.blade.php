@@ -831,25 +831,8 @@ new class extends Component
                             }
                         });
 
-                        this.loadLeafletAndInit();
-                    },
-
-                    loadLeafletAndInit() {
-                        if (typeof L !== 'undefined') {
-                            this.$nextTick(() => this.initMap());
-                            return;
-                        }
-
-                        const script = document.createElement('script');
-                        script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
-                        script.integrity = 'sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=';
-                        script.crossOrigin = '';
-                        script.onload = () => {
-                            L.Icon.Default.imagePath = 'https://unpkg.com/leaflet@1.9.4/dist/images/';
-                            this.$nextTick(() => this.initMap());
-                        };
-                        script.onerror = () => console.error('Failed to load Leaflet');
-                        document.head.appendChild(script);
+                        // Leaflet is bundled via Vite, init map directly
+                        this.$nextTick(() => this.initMap());
                     },
 
                     initMap() {
