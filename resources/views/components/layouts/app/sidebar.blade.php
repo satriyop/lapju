@@ -15,7 +15,8 @@
             </flux:sidebar.header>
 
             <flux:sidebar.nav>
-                <flux:sidebar.group heading="{{ __('Platform Progress') }}" class="grid">
+                {{-- Platform Progress - use expandable group with icon --}}
+                <flux:sidebar.group expandable heading="{{ __('Platform Progress') }}" icon="chart-pie">
                     <flux:sidebar.item icon="home" :href="route('dashboard')" :current="request()->routeIs('dashboard')" wire:navigate>{{ __('Dashboard') }}</flux:sidebar.item>
                     @can('access-map')
                     <flux:sidebar.item icon="map" :href="route('map.index')" :current="request()->routeIs('map.index')" wire:navigate>{{ __('Project Map') }}</flux:sidebar.item>
@@ -28,13 +29,13 @@
                 </flux:sidebar.group>
 
                 @if(auth()->user()->hasPermission('manage_users'))
-                    <flux:sidebar.group heading="{{ __('User Management') }}" class="grid">
+                    <flux:sidebar.group expandable heading="{{ __('User Management') }}" icon="users">
                         <flux:sidebar.item icon="user-group" :href="route('admin.users.index')" :current="request()->routeIs('admin.users.index')" wire:navigate>{{ __('Users') }}</flux:sidebar.item>
                     </flux:sidebar.group>
                 @endif
 
                 @if(auth()->user()->isAdmin())
-                <flux:sidebar.group heading="{{ __('Administration') }}" class="grid">
+                <flux:sidebar.group expandable heading="{{ __('Administration') }}" icon="cog-6-tooth">
                     <flux:sidebar.item icon="building-office" :href="route('admin.offices.index')" :current="request()->routeIs('admin.offices.index')" wire:navigate>{{ __('Offices') }}</flux:sidebar.item>
                     <flux:sidebar.item icon="map-pin" :href="route('admin.locations.index')" :current="request()->routeIs('admin.locations.index')" wire:navigate>{{ __('Locations') }}</flux:sidebar.item>
                     <flux:sidebar.item icon="users" :href="route('partners.index')" :current="request()->routeIs('partners.index')" wire:navigate>{{ __('Partners') }}</flux:sidebar.item>
