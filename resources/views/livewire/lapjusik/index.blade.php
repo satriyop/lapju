@@ -494,115 +494,138 @@ new class extends Component
     }
 }; ?>
 
-<div class="flex h-full w-full flex-1 flex-col gap-6">
-    {{-- Filters --}}
-    @if(!auth()->user()->hasRole('Reporter'))
-        <div class="grid grid-cols-1 gap-4 md:grid-cols-4">
-            <div>
-                <label class="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">
-                    {{ __('Kodam') }}
-                </label>
-                <flux:select wire:model.live="selectedKodamId" :disabled="$filtersLocked">
-                    <option value="">{{ __('All Kodam') }}</option>
-                    @foreach($kodams as $kodam)
-                        <option value="{{ $kodam->id }}">{{ $kodam->name }}</option>
-                    @endforeach
-                </flux:select>
-            </div>
-
-            <div>
-                <label class="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">
-                    {{ __('Korem') }}
-                </label>
-                <flux:select wire:model.live="selectedKoremId" :disabled="$filtersLocked || !$selectedKodamId">
-                    <option value="">{{ $selectedKodamId ? __('Select Korem...') : __('Select Kodam first') }}</option>
-                    @foreach($korems as $korem)
-                        <option value="{{ $korem->id }}">{{ $korem->name }}</option>
-                    @endforeach
-                </flux:select>
-            </div>
-
-            <div>
-                <label class="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">
-                    {{ __('Kodim') }}
-                </label>
-                <flux:select wire:model.live="selectedKodimId" :disabled="$filtersLocked || !$selectedKoremId">
-                    <option value="">{{ $selectedKoremId ? __('All Kodim') : __('Select Korem first') }}</option>
-                    @foreach($kodims as $kodim)
-                        <option value="{{ $kodim->id }}">{{ $kodim->name }} ({{ $kodim->projects_count }})</option>
-                    @endforeach
-                </flux:select>
-            </div>
-
-            <div>
-                <label class="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">
-                    {{ __('Koramil') }}
-                </label>
-                <flux:select wire:model.live="selectedKoramilId" :disabled="!$selectedKodimId">
-                    <option value="">{{ $selectedKodimId ? __('All Koramil') : __('Select Kodim first') }}</option>
-                    @foreach($koramils as $koramil)
-                        <option value="{{ $koramil->id }}">{{ $koramil->name }} ({{ $koramil->projects_count }})</option>
-                    @endforeach
-                </flux:select>
-            </div>
+<div class="flex h-full w-full flex-1 flex-col gap-6" x-data="{ showFilters: !@js($projectId) && window.innerWidth >= 1024 }" x-init="$watch('$wire.projectId', value => { if (value) showFilters = false })">
+    {{-- Header with Filter Toggle --}}
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <h1 class="text-2xl font-extrabold tracking-tight text-neutral-900 dark:text-white sm:text-3xl">
+                Lapjusik
+            </h1>
+            <p class="mt-1 text-sm text-neutral-500 dark:text-neutral-400">
+                Laporan Kemajuan Fisik
+            </p>
         </div>
 
-        {{-- Project and Period Selection --}}
-        <div class="grid grid-cols-1 gap-4 md:grid-cols-4">
-            <div class="md:col-span-2">
-                <label class="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">
-                    {{ __('Project') }}
-                </label>
-                <flux:select wire:model.live="projectId">
-                    <option value="">{{ __('Select Project...') }}</option>
-                    @foreach($projects as $proj)
-                        <option value="{{ $proj->id }}">{{ $proj->name }}</option>
-                    @endforeach
-                </flux:select>
+        <div class="flex items-center gap-3">
+            {{-- Filter Toggle Button --}}
+            <button
+                @click="showFilters = !showFilters"
+                class="flex items-center gap-2 rounded-lg border border-neutral-300 bg-white px-4 py-2.5 text-sm font-medium text-neutral-700 shadow-sm transition hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
+            >
+                <flux:icon.funnel class="h-4 w-4" />
+                <span x-text="showFilters ? 'Sembunyikan Filter' : 'Tampilkan Filter'"></span>
+                <flux:icon.chevron-down class="h-4 w-4 transition-transform" x-bind:class="showFilters ? 'rotate-180' : ''" />
+            </button>
+        </div>
+    </div>
+
+    {{-- Filters Panel --}}
+    <div
+        x-show="showFilters"
+        x-collapse
+    >
+        <div class="rounded-xl border border-neutral-200 bg-white p-4 shadow-sm dark:border-neutral-700 dark:bg-neutral-800/50">
+            <div class="mb-4 flex items-center gap-2">
+                <flux:icon.adjustments-horizontal class="h-5 w-5 text-neutral-500" />
+                <span class="text-sm font-semibold text-neutral-700 dark:text-neutral-300">Filter Data</span>
             </div>
 
-            <div class="md:col-span-2">
-                <label class="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">
-                    {{ __('Period') }}
-                </label>
-                <div class="flex items-center gap-2">
-                    <flux:button wire:click="previousMonth" size="sm" variant="ghost" icon="chevron-left" />
-                    <div class="flex-1 rounded-lg border border-neutral-200 bg-white px-4 py-2 text-center font-semibold text-neutral-900 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100">
-                        {{ strtoupper($monthName) }} {{ $selectedYear }}
+            @if(!auth()->user()->hasRole('Reporter'))
+                <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+                    {{-- Kodam --}}
+                    <div>
+                        <flux:select wire:model.live="selectedKodamId" label="Kodam" :disabled="$filtersLocked" size="sm">
+                            <option value="">Semua Kodam</option>
+                            @foreach($kodams as $kodam)
+                                <option value="{{ $kodam->id }}">{{ $kodam->name }}</option>
+                            @endforeach
+                        </flux:select>
                     </div>
-                    <flux:button wire:click="nextMonth" size="sm" variant="ghost" icon="chevron-right" />
-                </div>
-            </div>
-        </div>
-    @else
-        {{-- Reporter: Only project and period filter --}}
-        <div class="grid grid-cols-1 gap-4 md:grid-cols-4">
-            <div class="md:col-span-2">
-                <label class="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">
-                    {{ __('Project') }}
-                </label>
-                <flux:select wire:model.live="projectId">
-                    <option value="">{{ __('Select Project...') }}</option>
-                    @foreach($projects as $proj)
-                        <option value="{{ $proj->id }}">{{ $proj->name }}</option>
-                    @endforeach
-                </flux:select>
-            </div>
 
-            <div class="md:col-span-2">
-                <label class="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">
-                    {{ __('Period') }}
-                </label>
-                <div class="flex items-center gap-2">
-                    <flux:button wire:click="previousMonth" size="sm" variant="ghost" icon="chevron-left" />
-                    <div class="flex-1 rounded-lg border border-neutral-200 bg-white px-4 py-2 text-center font-semibold text-neutral-900 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100">
-                        {{ strtoupper($monthName) }} {{ $selectedYear }}
+                    {{-- Korem --}}
+                    <div>
+                        <flux:select wire:model.live="selectedKoremId" label="Korem" :disabled="$filtersLocked || !$selectedKodamId" size="sm">
+                            <option value="">{{ $selectedKodamId ? 'Pilih Korem...' : 'Pilih Kodam dulu' }}</option>
+                            @foreach($korems as $korem)
+                                <option value="{{ $korem->id }}">{{ $korem->name }}</option>
+                            @endforeach
+                        </flux:select>
                     </div>
-                    <flux:button wire:click="nextMonth" size="sm" variant="ghost" icon="chevron-right" />
+
+                    {{-- Kodim --}}
+                    <div>
+                        <flux:select wire:model.live="selectedKodimId" label="Kodim" :disabled="$filtersLocked || !$selectedKoremId" size="sm">
+                            <option value="">{{ $selectedKoremId ? 'Semua Kodim' : 'Pilih Korem dulu' }}</option>
+                            @foreach($kodims as $kodim)
+                                <option value="{{ $kodim->id }}">{{ $kodim->name }} ({{ $kodim->projects_count }})</option>
+                            @endforeach
+                        </flux:select>
+                    </div>
+
+                    {{-- Koramil --}}
+                    <div>
+                        <flux:select wire:model.live="selectedKoramilId" label="Koramil" :disabled="!$selectedKodimId" size="sm">
+                            <option value="">{{ $selectedKodimId ? 'Semua Koramil' : 'Pilih Kodim dulu' }}</option>
+                            @foreach($koramils as $koramil)
+                                <option value="{{ $koramil->id }}">{{ $koramil->name }} ({{ $koramil->projects_count }})</option>
+                            @endforeach
+                        </flux:select>
+                    </div>
+
+                    {{-- Project --}}
+                    <div>
+                        <flux:select wire:model.live="projectId" label="Project" size="sm">
+                            <option value="">Pilih Project...</option>
+                            @foreach($projects as $proj)
+                                <option value="{{ $proj->id }}">{{ $proj->name }}</option>
+                            @endforeach
+                        </flux:select>
+                    </div>
+
+                    {{-- Period --}}
+                    <div>
+                        <flux:field>
+                            <flux:label>Periode</flux:label>
+                            <div class="flex items-center gap-1">
+                                <flux:button wire:click="previousMonth" size="sm" variant="ghost" icon="chevron-left" />
+                                <div class="flex-1 rounded-lg border border-neutral-200 bg-white px-2 py-1.5 text-center text-sm font-semibold text-neutral-900 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100">
+                                    {{ strtoupper($monthName) }}
+                                </div>
+                                <flux:button wire:click="nextMonth" size="sm" variant="ghost" icon="chevron-right" />
+                            </div>
+                        </flux:field>
+                    </div>
                 </div>
-            </div>
+            @else
+                {{-- Reporter: Only project and period filter --}}
+                <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    {{-- Project --}}
+                    <div>
+                        <flux:select wire:model.live="projectId" label="Project" size="sm">
+                            <option value="">Pilih Project...</option>
+                            @foreach($projects as $proj)
+                                <option value="{{ $proj->id }}">{{ $proj->name }}</option>
+                            @endforeach
+                        </flux:select>
+                    </div>
+
+                    {{-- Period --}}
+                    <div>
+                        <flux:field>
+                            <flux:label>Periode</flux:label>
+                            <div class="flex items-center gap-1">
+                                <flux:button wire:click="previousMonth" size="sm" variant="ghost" icon="chevron-left" />
+                                <div class="flex-1 rounded-lg border border-neutral-200 bg-white px-2 py-1.5 text-center text-sm font-semibold text-neutral-900 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100">
+                                    {{ strtoupper($monthName) }} 
+                                </div>
+                                <flux:button wire:click="nextMonth" size="sm" variant="ghost" icon="chevron-right" />
+                            </div>
+                        </flux:field>
+                    </div>
+                </div>
+            @endif
         </div>
-    @endif
+    </div>
 
     {{-- Project Info Cards --}}
     @if($selectedProject)
