@@ -855,7 +855,10 @@ new class extends Component
                         // Initialize with light theme - OpenStreetMap standard
                         this.map = L.map('map', {
                             zoomControl: true,
-                            attributionControl: false
+                            attributionControl: false,
+                            zoomAnimation: true,
+                            markerZoomAnimation: false,
+                            fadeAnimation: true
                         }).setView([-7.5500, 110.8243], 10);
 
                         // Light map tiles - CartoDB Positron (clean, light theme)
@@ -885,10 +888,20 @@ new class extends Component
                     updateMarkers(projects) {
                         if (!this.map) return;
 
+                        // Wait if map is currently zooming to prevent animation errors
+                        if (this.map._animatingZoom) {
+                            this.map.once('zoomend', () => this.updateMarkers(projects));
+                            return;
+                        }
+
                         // Clear existing
                         this.markers.forEach(m => {
-                            if (this.map.hasLayer(m.marker)) {
-                                this.map.removeLayer(m.marker);
+                            try {
+                                if (this.map && this.map.hasLayer(m.marker)) {
+                                    this.map.removeLayer(m.marker);
+                                }
+                            } catch (e) {
+                                // Ignore errors during marker removal
                             }
                         });
                         this.markers = [];
