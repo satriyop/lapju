@@ -622,7 +622,7 @@ new class extends Component
             </div>
 
             {{-- Map Area --}}
-            <div class="relative flex-1" wire:ignore>
+            <div class="relative h-full flex-1 overflow-hidden" wire:ignore>
                 <div id="map" class="absolute inset-0"></div>
 
                 {{-- Coordinates --}}

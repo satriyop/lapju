@@ -308,3 +308,93 @@ echo -e "\n=== Check Complete ==="
 ```
 
 Run with: `bash check-map.sh`
+
+
+
+
+ Can you run this in the production browser console and tell me the results?
+
+  console.log('Map height:', document.getElementById('map').offsetHeight);
+  console.log('Map width:', document.getElementById('map').offsetWidth);
+  console.log('Parent height:', document.getElementById('map').parentElement.offsetHeight);
+
+  If the height is 0, that confirms the CSS issue. The difference between local and production could be:
+  1. Different viewport sizes
+  2. CSS loading order differences
+  3. Flex container height not propagating in production build
+
+> [Image #1] 
+
+⏺ Interesting! The map container has proper dimensions (height: 38387px, width: 800px). So it's NOT a CSS height issue.
+
+  Since the container has size and "Map initialized" logged, the issue must be with the map tiles loading or Leaflet CSS not being applied.
+
+  Can you run these checks in production console?
+
+  // Check if Leaflet container class is applied
+  console.log('Has leaflet class:', document.getElementById('map').classList.contains('leaflet-container'));
+
+  // Check if there are tile layers
+  console.log('Tile panes:', document.querySelectorAll('.leaflet-tile-pane img').length);
+
+  // Check the map instance
+  console.log('Map object:', document.getElementById('map')._leaflet_id);
+
+  Also, can you check the Network tab - are map tile requests (to basemaps.cartocdn.com) being made and what's their status?
+
+> [Image #1] [Image #2] 
+
+⏺ This is very revealing! The map is fully working:
+  - ✅ Has leaflet-container class
+  - ✅ 604 tile images loaded
+  - ✅ Map object initialized (id: 3)
+  - ✅ All JS files loading (200 status)
+
+  The map IS rendering with 604 tiles loaded! But you can't see it visually.
+
+  This must be a CSS visibility/z-index issue. The map is there but something is covering it or it's positioned off-screen.
+
+  Can you check:
+
+  // Check visibility and position
+  const map = document.getElementById('map');
+  const style = window.getComputedStyle(map);
+  console.log('visibility:', style.visibility);
+  console.log('opacity:', style.opacity);
+  console.log('z-index:', style.zIndex);
+  console.log('position:', style.position);
+  console.log('top:', style.top);
+  console.log('left:', style.left);
+  console.log('overflow:', style.overflow);
+
+  // Check if parent is clipping
+  const parent = map.parentElement;
+  const parentStyle = window.getComputedStyle(parent);
+  console.log('Parent overflow:', parentStyle.overflow);
+  console.log('Parent position:', parentStyle.position);
+
+  Also, can you scroll down on the page? Maybe the map is rendering below the visible viewport (the height is 38387px which is huge - about 38x a normal screen).
+
+> [Image #1] 
+
+⏺ The CSS looks correct (visible, opacity 1, position absolute, top/left 0px). But the map height is 38387px which is abnormally large.
+
+  Let me check one more thing - the tile images themselves:
+
+  // Check if tiles are visible
+  const tiles = document.querySelectorAll('.leaflet-tile-pane img');
+  console.log('First tile src:', tiles[0]?.src);
+  console.log('First tile dimensions:', tiles[0]?.offsetWidth, 'x', tiles[0]?.offsetHeight);
+  console.log('First tile style:', tiles[0]?.style.cssText);
+
+  // Check leaflet pane visibility
+  const tilePane = document.querySelector('.leaflet-tile-pane');
+  console.log('Tile pane transform:', window.getComputedStyle(tilePane).transform);
+
+  Also, can you scroll down on the production page? With a height of 38387px, the visible content might be way below the viewport. Or try:
+
+  // Scroll to where tiles might be
+  document.getElementById('map').scrollIntoView();
+
+  And one critical check - can you open Elements tab in DevTools and look at the #map element structure? Check if .leaflet-tile-pane has any visible tiles or if they're
+  positioned somewhere off-screen.
