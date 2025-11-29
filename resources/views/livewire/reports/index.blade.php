@@ -161,28 +161,20 @@ new class extends Component
 
             $projects = $query->orderBy('name')->get();
         } else {
-            // SAFEGUARD: Require at least Korem filter to prevent loading all 498 projects
-            if (! $this->selectedKoremId) {
+            // SAFEGUARD: Require Kodim filter to prevent memory exhaustion
+            // With 1,655 tasks and 16,907 progress records per Korem, we MUST filter by Kodim
+            if (! $this->selectedKodimId) {
                 return [];
             }
 
-            // Build project query based on filters
+            // Build project query based on Kodim filter
+            $koramils = Office::where('parent_id', $this->selectedKodimId)->pluck('id');
+
             $query = Project::with([
                 'location',
                 'office.parent',
                 'tasks' => fn ($q) => $q->whereNull('parent_id'),
-            ]);
-
-            // Apply office filters
-            if ($this->selectedKodimId) {
-                $koramils = Office::where('parent_id', $this->selectedKodimId)->pluck('id');
-                $query->whereIn('office_id', $koramils);
-            } else {
-                // Korem level - get all projects under this Korem
-                $kodims = Office::where('parent_id', $this->selectedKoremId)->pluck('id');
-                $koramils = Office::whereIn('parent_id', $kodims)->pluck('id');
-                $query->whereIn('office_id', $koramils);
-            }
+            ])->whereIn('office_id', $koramils);
 
             $projects = $query->orderBy('name')->get();
         }
@@ -193,13 +185,15 @@ new class extends Component
         }
 
         // OPTIMIZED: Get all leaf tasks with keyed collection for O(1) lookups
-        $leafTasksByProject = Task::whereIn('project_id', $projectIds)
+        // Only select columns we need
+        $leafTasksByProject = Task::select('id', 'project_id', 'name', 'weight')
+            ->whereIn('project_id', $projectIds)
             ->whereRaw('_rgt = _lft + 1')
             ->get()
             ->groupBy('project_id');
 
         // OPTIMIZED: Get ONLY latest progress per task using subquery (not all records!)
-        // This reduces thousands of records to just one per task
+        // Only select columns we actually need to minimize memory
         $latestProgressIds = DB::table('task_progress')
             ->select(DB::raw('MAX(id) as id'))
             ->whereIn('project_id', $projectIds)
@@ -207,7 +201,8 @@ new class extends Component
             ->groupBy('task_id', 'project_id')
             ->pluck('id');
 
-        $latestProgressByProject = TaskProgress::whereIn('id', $latestProgressIds)
+        $latestProgressByProject = TaskProgress::select('id', 'project_id', 'task_id', 'percentage', 'notes')
+            ->whereIn('id', $latestProgressIds)
             ->get()
             ->groupBy('project_id');
 
@@ -219,7 +214,8 @@ new class extends Component
             ->groupBy('task_id', 'project_id')
             ->pluck('id');
 
-        $beforeProgressByProject = TaskProgress::whereIn('id', $beforeProgressIds)
+        $beforeProgressByProject = TaskProgress::select('id', 'project_id', 'task_id', 'percentage')
+            ->whereIn('id', $beforeProgressIds)
             ->get()
             ->groupBy('project_id');
 
@@ -688,7 +684,7 @@ new class extends Component
                 {{ __('No Data Available') }}
             </p>
             <p class="mt-1 text-sm text-neutral-500 dark:text-neutral-500">
-                {{ __('Select filters above to view project progress report') }}
+                {{ __('Select Kodim above to view project progress report') }}
             </p>
         </div>
     @endif
