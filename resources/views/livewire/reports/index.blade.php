@@ -158,38 +158,41 @@ new class extends Component
         $reportDate = Carbon::parse($this->reportDate);
         $reportDateStr = $reportDate->format('Y-m-d');
 
-        // Build project query based on filters
-        $query = Project::with([
-            'location',
-            'office.parent',
-            'tasks' => fn ($q) => $q->whereNull('parent_id'),
-        ]);
-
-        // Apply office filters
-        if ($this->selectedKodimId) {
-            $koramils = Office::where('parent_id', $this->selectedKodimId)->pluck('id');
-            $query->whereIn('office_id', $koramils);
-        } elseif ($this->selectedKoremId) {
-            $kodims = Office::where('parent_id', $this->selectedKoremId)->pluck('id');
-            $koramils = Office::whereIn('parent_id', $kodims)->pluck('id');
-            $query->whereIn('office_id', $koramils);
-        } elseif ($this->selectedKodamId) {
-            $korems = Office::where('parent_id', $this->selectedKodamId)->pluck('id');
-            $kodims = Office::whereIn('parent_id', $korems)->pluck('id');
-            $koramils = Office::whereIn('parent_id', $kodims)->pluck('id');
-            $query->whereIn('office_id', $koramils);
-        }
-
-        // For reporters, only show their projects
+        // For reporters, only show their projects (no filter required)
         if ($currentUser->hasRole('Reporter')) {
             $query = $currentUser->projects()->with([
                 'location',
                 'office.parent',
                 'tasks' => fn ($q) => $q->whereNull('parent_id'),
             ]);
-        }
 
-        $projects = $query->orderBy('name')->get();
+            $projects = $query->orderBy('name')->get();
+        } else {
+            // SAFEGUARD: Require at least Korem filter to prevent loading all 498 projects
+            if (! $this->selectedKoremId) {
+                return [];
+            }
+
+            // Build project query based on filters
+            $query = Project::with([
+                'location',
+                'office.parent',
+                'tasks' => fn ($q) => $q->whereNull('parent_id'),
+            ]);
+
+            // Apply office filters
+            if ($this->selectedKodimId) {
+                $koramils = Office::where('parent_id', $this->selectedKodimId)->pluck('id');
+                $query->whereIn('office_id', $koramils);
+            } else {
+                // Korem level - get all projects under this Korem
+                $kodims = Office::where('parent_id', $this->selectedKoremId)->pluck('id');
+                $koramils = Office::whereIn('parent_id', $kodims)->pluck('id');
+                $query->whereIn('office_id', $koramils);
+            }
+
+            $projects = $query->orderBy('name')->get();
+        }
         $projectIds = $projects->pluck('id')->toArray();
 
         if (empty($projectIds)) {
