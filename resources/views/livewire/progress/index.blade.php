@@ -38,6 +38,60 @@ new class extends Component
 
     public array $photoCaptions = [];
 
+    /**
+     * Cached user office with level relationship.
+     * Prevents redundant queries across mount(), saveProgress(), uploadPhoto(), and with().
+     */
+    private ?Office $cachedUserOffice = null;
+
+    private bool $userOfficeLoaded = false;
+
+    /**
+     * Cached selected project with relationships.
+     * Prevents redundant queries across with(), updatedSelectedDate(), saveProgress(), uploadPhoto().
+     */
+    private ?Project $cachedProject = null;
+
+    private ?int $cachedProjectId = null;
+
+    /**
+     * Get user's office with level relationship (cached).
+     */
+    private function getUserOffice(): ?Office
+    {
+        $currentUser = auth()->user();
+
+        if (! $currentUser->office_id) {
+            return null;
+        }
+
+        if (! $this->userOfficeLoaded) {
+            $this->cachedUserOffice = Office::with('level')->find($currentUser->office_id);
+            $this->userOfficeLoaded = true;
+        }
+
+        return $this->cachedUserOffice;
+    }
+
+    /**
+     * Get selected project with office relationship (cached).
+     * Cache invalidates when selectedProjectId changes.
+     */
+    private function getSelectedProject(): ?Project
+    {
+        if (! $this->selectedProjectId) {
+            return null;
+        }
+
+        // Invalidate cache if project ID changed
+        if ($this->cachedProjectId !== $this->selectedProjectId) {
+            $this->cachedProject = Project::with('office')->find($this->selectedProjectId);
+            $this->cachedProjectId = $this->selectedProjectId;
+        }
+
+        return $this->cachedProject;
+    }
+
     public function mount(): void
     {
         $this->selectedDate = now()->format('Y-m-d');
@@ -53,7 +107,7 @@ new class extends Component
         }
         // Kodim Admins can only see projects in Koramils under their Kodim
         elseif ($currentUser->hasRole('Kodim Admin') && $currentUser->office_id) {
-            $userOffice = Office::with('level')->find($currentUser->office_id);
+            $userOffice = $this->getUserOffice();
             if ($userOffice && $userOffice->level->level === 3) {
                 $projectQuery->whereHas('office', function ($q) use ($currentUser) {
                     $q->where('parent_id', $currentUser->office_id);
@@ -99,6 +153,9 @@ new class extends Component
     /**
      * Get latest progress for all tasks in the selected project up to the selected date.
      *
+     * Optimized: Uses GROUP BY + in-memory filtering instead of correlated subquery
+     * for better performance with large datasets (16,000+ progress entries).
+     *
      * @return array<int, array{percentage: float, progress_date: \Carbon\Carbon, notes: ?string}>
      */
     private function getLatestProgressMap(): array
@@ -107,26 +164,45 @@ new class extends Component
             return [];
         }
 
-        // Single query using correlated subquery (SQLite compatible)
-        // Gets the latest progress entry for each task up to the selected date
-        $latestProgress = TaskProgress::where('project_id', $this->selectedProjectId)
+        // Query 1: Get latest date per task (single GROUP BY - fast with index)
+        $latestDates = TaskProgress::where('project_id', $this->selectedProjectId)
             ->whereDate('progress_date', '<=', $this->selectedDate)
-            ->whereRaw('progress_date = (
-                SELECT MAX(tp2.progress_date)
-                FROM task_progress tp2
-                WHERE tp2.project_id = task_progress.project_id
-                AND tp2.task_id = task_progress.task_id
-                AND DATE(tp2.progress_date) <= ?
-            )', [$this->selectedDate])
+            ->selectRaw('task_id, MAX(progress_date) as max_date')
+            ->groupBy('task_id')
+            ->get()
+            ->keyBy('task_id');
+
+        if ($latestDates->isEmpty()) {
+            return [];
+        }
+
+        // Query 2: Fetch all progress entries and filter in memory
+        // This avoids the expensive correlated subquery
+        $allProgress = TaskProgress::where('project_id', $this->selectedProjectId)
+            ->whereDate('progress_date', '<=', $this->selectedDate)
             ->get();
 
         $progressMap = [];
-        foreach ($latestProgress as $entry) {
-            $progressMap[$entry->task_id] = [
-                'percentage' => (float) $entry->percentage,
-                'progress_date' => $entry->progress_date,
-                'notes' => $entry->notes,
-            ];
+        foreach ($allProgress as $entry) {
+            $maxDateEntry = $latestDates[$entry->task_id] ?? null;
+            if (! $maxDateEntry) {
+                continue;
+            }
+
+            // Compare dates (handle both Carbon and string formats)
+            $entryDate = $entry->progress_date instanceof Carbon
+                ? $entry->progress_date->format('Y-m-d')
+                : Carbon::parse($entry->progress_date)->format('Y-m-d');
+
+            $maxDate = Carbon::parse($maxDateEntry->max_date)->format('Y-m-d');
+
+            if ($entryDate === $maxDate) {
+                $progressMap[$entry->task_id] = [
+                    'percentage' => (float) $entry->percentage,
+                    'progress_date' => $entry->progress_date,
+                    'notes' => $entry->notes,
+                ];
+            }
         }
 
         return $progressMap;
@@ -187,8 +263,8 @@ new class extends Component
 
     public function updatedSelectedDate(): void
     {
-        // Get project to validate date range
-        $project = $this->selectedProjectId ? Project::find($this->selectedProjectId) : null;
+        // Get project to validate date range (cached)
+        $project = $this->getSelectedProject();
 
         // Validate that date is not in the future
         if ($this->selectedDate > $this->maxDate) {
@@ -256,8 +332,8 @@ new class extends Component
             return;
         }
 
-        // Get project to validate date range and authorization
-        $project = Project::with('office')->find($this->selectedProjectId);
+        // Get project to validate date range and authorization (cached)
+        $project = $this->getSelectedProject();
 
         if (! $project) {
             $this->addError('project', 'Project not found.');
@@ -280,7 +356,7 @@ new class extends Component
             }
             // Kodim Admins can only save for projects in Koramils under their Kodim
             elseif ($currentUser->hasRole('Kodim Admin') && $currentUser->office_id) {
-                $userOffice = Office::with('level')->find($currentUser->office_id);
+                $userOffice = $this->getUserOffice();
 
                 if (! $userOffice || $userOffice->level->level !== 3) {
                     $this->addError('project', 'Invalid office assignment.');
@@ -394,8 +470,8 @@ new class extends Component
             return;
         }
 
-        // Get project to validate date range and authorization
-        $project = Project::with('office')->find($this->selectedProjectId);
+        // Get project to validate date range and authorization (cached)
+        $project = $this->getSelectedProject();
 
         if (! $project) {
             $this->addError("photos.{$rootTaskId}", 'Project not found.');
@@ -418,7 +494,7 @@ new class extends Component
             }
             // Kodim Admins can only upload for projects in Koramils under their Kodim
             elseif ($currentUser->hasRole('Kodim Admin') && $currentUser->office_id) {
-                $userOffice = Office::with('level')->find($currentUser->office_id);
+                $userOffice = $this->getUserOffice();
 
                 if (! $userOffice || $userOffice->level->level !== 3) {
                     $this->addError("photos.{$rootTaskId}", 'Invalid office assignment.');
@@ -573,7 +649,7 @@ new class extends Component
         }
         // Managers at Kodim level can only see projects in Koramils under their Kodim
         elseif ($currentUser->hasRole('Manager') && $currentUser->office_id) {
-            $userOffice = Office::with('level')->find($currentUser->office_id);
+            $userOffice = $this->getUserOffice();
             if ($userOffice && $userOffice->level->level === 3) {
                 $projectsQuery->whereHas('office', function ($q) use ($currentUser) {
                     $q->where('parent_id', $currentUser->office_id);
@@ -609,20 +685,29 @@ new class extends Component
         // Calculate parent task progress (including root tasks)
         $parentProgressMap = $this->calculateParentProgress($allTasks, $latestProgressMap);
 
-        // Get selected project for date range display
-        $selectedProject = $this->selectedProjectId ? Project::find($this->selectedProjectId) : null;
+        // Get selected project for date range display (cached)
+        $selectedProject = $this->getSelectedProject();
 
-        // Pre-compute task depths using loaded collection (avoids N+1 in Blade)
+        // Pre-compute task depths and parent chains using indexed lookup (O(1) per parent)
+        // This replaces Blade's firstWhere() which is O(n) per lookup
+        $tasksById = $allTasks->keyBy('id');
         $taskDepths = [];
+        $parentChains = [];
+
         foreach ($allTasks as $task) {
             $depth = 0;
+            $chain = [];
             $currentId = $task->parent_id;
+
             while ($currentId !== null) {
                 $depth++;
-                $parent = $allTasks->firstWhere('id', $currentId);
+                $chain[] = $currentId;
+                $parent = $tasksById[$currentId] ?? null;
                 $currentId = $parent?->parent_id;
             }
+
             $taskDepths[$task->id] = $depth;
+            $parentChains[$task->id] = $chain;
         }
 
         // Pre-compute which root tasks have descendant progress (avoids N+1 in Blade)
@@ -652,6 +737,7 @@ new class extends Component
             'parentProgressMap' => $parentProgressMap,
             'selectedProject' => $selectedProject,
             'taskDepths' => $taskDepths,
+            'parentChains' => $parentChains,
             'rootTasksWithProgress' => $rootTasksWithProgress,
         ];
     }
@@ -796,19 +882,13 @@ new class extends Component
 
                         @foreach($descendants as $task)
                             @php
-                                // Use pre-computed depth (avoids N+1 queries)
+                                // Use pre-computed depth and parent chain (avoids N+1 queries)
                                 $depth = $taskDepths[$task->id] ?? 0;
                                 $task->depth = $depth;
                                 $task->has_children = $task->children->count() > 0;
 
-                                // Build parent chain using in-memory collection (no DB queries)
-                                $parentChain = [];
-                                $currentId = $task->parent_id;
-                                while ($currentId !== null) {
-                                    $parentChain[] = $currentId;
-                                    $parent = $allTasks->firstWhere('id', $currentId);
-                                    $currentId = $parent?->parent_id;
-                                }
+                                // Use pre-computed parent chain (O(1) lookup instead of O(n) traversal)
+                                $parentChain = $parentChains[$task->id] ?? [];
 
                                 // Check visibility
                                 $isVisible = $depth == 0 || empty($parentChain) || count(array_intersect($parentChain, $expandedTasks)) === count($parentChain);

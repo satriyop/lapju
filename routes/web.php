@@ -18,7 +18,7 @@ Route::middleware(['auth', 'approved'])->group(function () {
     Volt::route('projects', 'projects.index')->name('projects.index');
     Volt::route('progress', 'progress.index')->name('progress.index');
     Volt::route('calendar-progress', 'calendar-progress')->name('calendar-progress.index');
-    Volt::route('map', 'map.index')->name('map.index');
+    Volt::route('map', 'map.index')->name('map.index')->can('access-map');
 
     // Reports routes
     Volt::route('reports', 'reports.index')->name('reports.index');

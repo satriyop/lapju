@@ -51,7 +51,9 @@ new class extends Component
 
     private $cachedBatchProgress = null;
 
-    private $cachedProjectProgress = null;
+    private $cachedHistoricalProgress = null;
+
+    private $cachedLatestProgress = null;
 
     public function mount(): void
     {
@@ -303,14 +305,17 @@ new class extends Component
 
     /**
      * Get cached project default dates from settings
+     * OPTIMIZED: Use Laravel's persistent cache (5 minutes) instead of per-request cache
      */
     private function getCachedSettings(): array
     {
         if ($this->cachedSettings === null) {
-            $this->cachedSettings = [
-                'start_date' => Setting::get('project.default_start_date', '2025-11-01'),
-                'end_date' => Setting::get('project.default_end_date', '2026-01-31'),
-            ];
+            $this->cachedSettings = cache()->remember('dashboard_settings', 300, function () {
+                return [
+                    'start_date' => Setting::get('project.default_start_date', '2025-11-01'),
+                    'end_date' => Setting::get('project.default_end_date', '2026-01-31'),
+                ];
+            });
         }
 
         return $this->cachedSettings;
@@ -318,17 +323,21 @@ new class extends Component
 
     /**
      * Get cached office levels
+     * OPTIMIZED: Use Laravel's persistent cache (1 hour) - office levels rarely change
      */
     private function getCachedOfficeLevels(): object
     {
         if ($this->cachedOfficeLevels === null) {
-            $levels = OfficeLevel::all()->keyBy('level');
-            $this->cachedOfficeLevels = (object) [
-                'kodam' => $levels->get(1),
-                'korem' => $levels->get(2),
-                'kodim' => $levels->get(3),
-                'koramil' => $levels->get(4),
-            ];
+            $this->cachedOfficeLevels = cache()->remember('dashboard_office_levels', 3600, function () {
+                $levels = OfficeLevel::all()->keyBy('level');
+
+                return (object) [
+                    'kodam' => $levels->get(1),
+                    'korem' => $levels->get(2),
+                    'kodim' => $levels->get(3),
+                    'koramil' => $levels->get(4),
+                ];
+            });
         }
 
         return $this->cachedOfficeLevels;
@@ -346,24 +355,22 @@ new class extends Component
 
         $upToDate = $upToDate ?? now()->format('Y-m-d');
 
-        // Use JOIN instead of correlated subquery to avoid N+1 on subqueries
+        // OPTIMIZED: Use joinSub with proper parameter binding (prevents SQL injection)
+        $latestDates = DB::table('task_progress')
+            ->select('task_id', 'project_id', DB::raw('MAX(progress_date) as max_date'))
+            ->whereIn('project_id', $projectIds)
+            ->where('progress_date', '<=', $upToDate)
+            ->groupBy('task_id', 'project_id');
+
         $latestProgress = DB::table('task_progress as tp1')
             ->select('tp1.task_id', 'tp1.project_id', 'tp1.percentage', 'tp1.progress_date')
-            ->join(DB::raw('(
-                SELECT task_id, project_id, MAX(progress_date) as max_date
-                FROM task_progress
-                WHERE project_id IN ('.implode(',', array_map('intval', $projectIds)).')
-                  AND progress_date <= '."'{$upToDate}'".'
-                GROUP BY task_id, project_id
-            ) latest'), function ($join) {
+            ->joinSub($latestDates, 'latest', function ($join) {
                 $join->on('tp1.task_id', '=', 'latest.task_id')
                     ->on('tp1.project_id', '=', 'latest.project_id')
                     ->on('tp1.progress_date', '=', 'latest.max_date');
             })
             ->get()
-            ->keyBy(function ($item) {
-                return "{$item->project_id}_{$item->task_id}";
-            });
+            ->keyBy(fn ($item) => "{$item->project_id}_{$item->task_id}");
 
         return $latestProgress->all();
     }
@@ -387,11 +394,11 @@ new class extends Component
             return [];
         }
 
-        // OPTIMIZED: For single project view, reuse getCachedProjectProgress() data to avoid duplicate query
-        if (count($projectIds) === 1 && $projectIds[0] == $this->selectedProjectId && $this->cachedProjectProgress !== null) {
-            // Transform the cached project progress data to the grouped array format expected by getProgressAtDate()
+        // OPTIMIZED: For single project view, reuse getCachedHistoricalProgress() data to avoid duplicate query
+        if (count($projectIds) === 1 && $projectIds[0] == $this->selectedProjectId && $this->cachedHistoricalProgress !== null) {
+            // Transform the cached historical progress data to the grouped array format expected by getProgressAtDate()
             $grouped = [];
-            foreach ($this->cachedProjectProgress as $progress) {
+            foreach ($this->cachedHistoricalProgress as $progress) {
                 $key = "{$progress->project_id}_{$progress->task_id}";
                 if (! isset($grouped[$key])) {
                     $grouped[$key] = [];
@@ -408,15 +415,13 @@ new class extends Component
         $startDate = $settings['start_date'];
         $endDate = $settings['end_date'];
 
-        // FIXED: Load progress records ONLY for LEAF tasks (where actual work happens)
-        // Parent task progress should not be included in calculations
-        $allProgress = TaskProgress::whereIn('project_id', $projectIds)
-            ->whereBetween('progress_date', [$startDate, $endDate])
-            ->whereHas('task', function ($query) {
-                $query->whereDoesntHave('children');  // Only leaf tasks
-            })
-            ->select('task_id', 'project_id', 'percentage', 'progress_date')
-            ->orderBy('progress_date', 'desc')
+        // OPTIMIZED: Use nested set columns - leaf nodes have _rgt = _lft + 1 (no correlated subquery!)
+        $allProgress = TaskProgress::whereIn('task_progress.project_id', $projectIds)
+            ->whereBetween('task_progress.progress_date', [$startDate, $endDate])
+            ->join('tasks', 'task_progress.task_id', '=', 'tasks.id')
+            ->whereRaw('tasks._rgt = tasks._lft + 1')
+            ->select('task_progress.task_id', 'task_progress.project_id', 'task_progress.percentage', 'task_progress.progress_date')
+            ->orderBy('task_progress.progress_date', 'desc')
             ->get();
 
         // Group by project_id_task_id for efficient lookup
@@ -490,10 +495,11 @@ new class extends Component
     private function getCachedLeafTasks($projectId)
     {
         if (! isset($this->cachedLeafTasks[$projectId])) {
-            // FIXED: Load with same structure as batch load for consistency
-            $this->cachedLeafTasks[$projectId] = Task::select('id', 'project_id', 'weight')
+            // OPTIMIZED: Use nested set columns - leaf nodes have _rgt = _lft + 1 (no subquery needed!)
+            // Includes name, parent_id, _lft for task display and breadcrumb generation
+            $this->cachedLeafTasks[$projectId] = Task::select('id', 'project_id', 'name', 'weight', '_lft', '_rgt', 'parent_id')
                 ->where('project_id', $projectId)
-                ->whereDoesntHave('children')
+                ->whereRaw('_rgt = _lft + 1')
                 ->get();
         }
 
@@ -515,27 +521,54 @@ new class extends Component
     }
 
     /**
-     * Get cached TaskProgress for selected project
-     * OPTIMIZED: Load once and reuse for both hierarchical view and task breakdown
-     * FIXED: Use organization-wide date range for consistency with S-curve calculations
+     * Get cached HISTORICAL TaskProgress for selected project (for S-curve calculations)
+     * OPTIMIZED: Load historical progress data across organization-wide date range
+     * NOTE: For task breakdown display, use getCachedLatestProgress() instead
      */
-    private function getCachedProjectProgress()
+    private function getCachedHistoricalProgress()
     {
-        if ($this->cachedProjectProgress === null && $this->selectedProjectId) {
-            // FIXED: Use organization-wide date range (same as loadAllProgressData and S-curve)
+        if ($this->cachedHistoricalProgress === null && $this->selectedProjectId) {
+            // Load ALL historical progress within organization date range (needed for S-curve)
             // This ensures consistent data loading across all calculations
             $settings = $this->getCachedSettings();
             $startDate = $settings['start_date'];
             $endDate = $settings['end_date'];
 
-            // FIXED: Only load progress for LEAF tasks (tasks without children) to avoid double-counting
-            // Parent task progress should not be included in weighted averages
-            $this->cachedProjectProgress = TaskProgress::where('project_id', $this->selectedProjectId)
-                ->whereBetween('progress_date', [$startDate, $endDate])
-                ->whereHas('task', function ($query) {
-                    // Only include tasks that don't have children (leaf tasks)
-                    $query->whereDoesntHave('children');
-                })
+            // OPTIMIZED: Use nested set columns - leaf nodes have _rgt = _lft + 1 (no subquery needed!)
+            $this->cachedHistoricalProgress = TaskProgress::where('task_progress.project_id', $this->selectedProjectId)
+                ->whereBetween('task_progress.progress_date', [$startDate, $endDate])
+                ->join('tasks', 'task_progress.task_id', '=', 'tasks.id')
+                ->whereRaw('tasks._rgt = tasks._lft + 1')
+                ->select('task_progress.id', 'task_progress.task_id', 'task_progress.project_id', 'task_progress.percentage', 'task_progress.progress_date', 'task_progress.notes')
+                ->with(['task' => function ($query) {
+                    $query->select('id', 'project_id', 'parent_id', 'name', 'weight');
+                }])
+                ->get();
+        }
+
+        return $this->cachedHistoricalProgress ?? collect();
+    }
+
+    /**
+     * Get cached LATEST TaskProgress for selected project (for task breakdown display)
+     * OPTIMIZED: Load only the most recent progress entry per leaf task
+     * This dramatically reduces data from ~16,572 records to ~213 records (one per task)
+     */
+    private function getCachedLatestProgress()
+    {
+        if ($this->cachedLatestProgress === null && $this->selectedProjectId) {
+            // OPTIMIZED: Load only the latest progress entry for each leaf task
+            // Step 1: Get the latest progress ID for each task using a subquery
+            $latestProgressIds = DB::table('task_progress as tp')
+                ->select(DB::raw('MAX(tp.id) as latest_id'))
+                ->where('tp.project_id', $this->selectedProjectId)
+                ->join('tasks', 'tp.task_id', '=', 'tasks.id')
+                ->whereRaw('tasks._rgt = tasks._lft + 1') // Leaf tasks only
+                ->groupBy('tp.task_id')
+                ->pluck('latest_id');
+
+            // Step 2: Load only those latest progress records with eager loaded tasks
+            $this->cachedLatestProgress = TaskProgress::whereIn('id', $latestProgressIds)
                 ->select('id', 'task_id', 'project_id', 'percentage', 'progress_date', 'notes')
                 ->with(['task' => function ($query) {
                     $query->select('id', 'project_id', 'parent_id', 'name', 'weight');
@@ -543,7 +576,7 @@ new class extends Component
                 ->get();
         }
 
-        return $this->cachedProjectProgress ?? collect();
+        return $this->cachedLatestProgress ?? collect();
     }
 
     /**
@@ -566,10 +599,11 @@ new class extends Component
         }
 
         // Load only the missing projects (or all if cache is empty)
-        // FIXED: Load only LEAF tasks (tasks without children) since progress is entered there
-        $allLeafTasks = Task::select('id', 'project_id', 'weight')
+        // OPTIMIZED: Use nested set columns - leaf nodes have _rgt = _lft + 1 (no subquery needed!)
+        // Includes name, parent_id, _lft for task display and breadcrumb generation
+        $allLeafTasks = Task::select('id', 'project_id', 'name', 'weight', '_lft', '_rgt', 'parent_id')
             ->whereIn('project_id', $missingProjectIds)
-            ->whereDoesntHave('children')  // Only leaf tasks have progress data
+            ->whereRaw('_rgt = _lft + 1')
             ->get()
             ->groupBy('project_id');
 
@@ -582,8 +616,14 @@ new class extends Component
     {
         // OPTIMIZED: Only select columns needed for the dropdown to reduce memory usage
         // OPTIMIZED: Only load locations that are actually used by projects (not all 1,561!)
+        // OPTIMIZED: Use subquery instead of loading all projects into memory
         $query = Location::select('id', 'village_name', 'district_name', 'city_name')
-            ->whereIn('id', Project::pluck('location_id')->unique());
+            ->whereIn('id', function ($subquery) {
+                $subquery->select('location_id')
+                    ->from('projects')
+                    ->whereNotNull('location_id')
+                    ->distinct();
+            });
 
         // Reporters can only see locations from their assigned projects
         if (auth()->user()->hasRole('Reporter')) {
@@ -1000,10 +1040,11 @@ new class extends Component
             $this->batchLoadAllLeafTasks($projectIds);
             $this->getCachedBatchProgress();
         } else {
-            // Single project view: load project progress ONCE (shared by hierarchical view, task breakdown, and S-curve)
+            // Single project view: load data ONCE for each purpose
             $this->batchLoadAllLeafTasks([$this->selectedProjectId]);
-            $this->getCachedProjectProgress(); // Loads TaskProgress with eager loaded tasks
-            $this->loadAllProgressData([$this->selectedProjectId]); // Will reuse the above data, just transforms format
+            $this->getCachedLatestProgress(); // OPTIMIZED: Latest progress for task breakdown (~213 records)
+            $this->getCachedHistoricalProgress(); // Historical progress for S-curve (~16,572 records when needed)
+            $this->loadAllProgressData([$this->selectedProjectId]); // Transform historical data for S-curve lookups
         }
 
         $locations = $this->getFilteredLocations();
@@ -1024,15 +1065,14 @@ new class extends Component
             : collect();
 
         $kodims = $kodimLevel && $this->selectedKoremId
-            ? Office::where('level_id', $kodimLevel->id)
-                ->where('parent_id', $this->selectedKoremId)
-                ->selectRaw('offices.id, offices.name, (
-                    SELECT COUNT(*) FROM projects
-                    WHERE projects.office_id IN (
-                        SELECT id FROM offices AS koramils WHERE koramils.parent_id = offices.id
-                    )
-                ) as projects_count')
-                ->orderBy('name')
+            ? Office::select('offices.id', 'offices.name')
+                ->where('offices.level_id', $kodimLevel->id)
+                ->where('offices.parent_id', $this->selectedKoremId)
+                ->leftJoin('offices as koramils', 'koramils.parent_id', '=', 'offices.id')
+                ->leftJoin('projects', 'projects.office_id', '=', 'koramils.id')
+                ->groupBy('offices.id', 'offices.name')
+                ->selectRaw('COUNT(DISTINCT projects.id) as projects_count')
+                ->orderBy('offices.name')
                 ->get()
             : collect();
 
@@ -1049,20 +1089,26 @@ new class extends Component
         $totalProjects = $projects->count();
 
         // Active projects: filtered projects that have progress records
+        // OPTIMIZED: Use whereExists instead of whereHas for better performance
         $activeProjects = Project::whereIn('id', $projectIds)
-            ->whereHas('progress')
-            ->distinct()
+            ->whereExists(function ($query) {
+                $query->select(DB::raw(1))
+                    ->from('task_progress')
+                    ->whereColumn('task_progress.project_id', 'projects.id');
+            })
             ->count();
 
         $totalLocations = $locations->count();
 
         // Reporters: users assigned to filtered projects
-        $totalReporters = User::whereHas('projects', function ($q) use ($projectIds) {
-            $q->whereIn('projects.id', $projectIds);
-        })
-            ->whereHas('roles', fn ($q) => $q->where('name', 'Reporter'))
+        // OPTIMIZED: Use JOINs instead of double whereHas for better performance
+        $totalReporters = User::join('project_user', 'users.id', '=', 'project_user.user_id')
+            ->join('role_user', 'users.id', '=', 'role_user.user_id')
+            ->join('roles', 'role_user.role_id', '=', 'roles.id')
+            ->whereIn('project_user.project_id', $projectIds)
+            ->where('roles.name', 'Reporter')
             ->distinct()
-            ->count();
+            ->count('users.id');
 
         $stats = [
             'total_projects' => $totalProjects,
@@ -1140,14 +1186,12 @@ new class extends Component
             ];
         }
 
-        // Get all tasks with their latest progress in the date range
-        // OPTIMIZED: Use cached project progress data (same data as hierarchical view)
-        $taskProgress = $this->getCachedProjectProgress()
-            ->groupBy('task_id')
-            ->map(function ($progressEntries) {
-                // Get the latest entry for each task
-                $latest = $progressEntries->sortByDesc('progress_date')->first();
-                $task = $latest->task;
+        // Get all tasks with their latest progress
+        // OPTIMIZED: Use latest progress cache (only ~213 records instead of 16,572!)
+        $taskProgress = $this->getCachedLatestProgress()
+            ->map(function ($progress) {
+                // Each record is already the latest progress for each task
+                $task = $progress->task;
 
                 // Build breadcrumb hierarchy and get root task
                 $breadcrumb = $this->getTaskBreadcrumb($task);
@@ -1155,9 +1199,9 @@ new class extends Component
 
                 return [
                     'task' => $task,
-                    'percentage' => (float) $latest->percentage,
-                    'progress_date' => $latest->progress_date,
-                    'notes' => $latest->notes,
+                    'percentage' => (float) $progress->percentage,
+                    'progress_date' => $progress->progress_date,
+                    'notes' => $progress->notes,
                     'breadcrumb' => $breadcrumb,
                     'root_task_id' => $rootTaskInfo['id'],
                     'root_task_name' => $rootTaskInfo['name'],
@@ -1218,25 +1262,20 @@ new class extends Component
             return [];
         }
 
-        // FIXED: Use organization-wide date range for consistency with all other calculations
-        $settings = $this->getCachedSettings();
-        $startDate = $settings['start_date'];
-        $endDate = $settings['end_date'];
-
-        // OPTIMIZATION: Preload all project tasks with parent hierarchy
+        // OPTIMIZATION: Preload all project tasks with parent hierarchy (needed for breadcrumb traversal)
         $tasks = $this->preloadProjectTasks($this->selectedProjectId);
 
-        // OPTIMIZED: Get leaf tasks from already preloaded tasks (no separate query)
-        $leafTasks = $tasks->filter(function ($task) use ($tasks) {
-            // A task is a leaf if no other task has it as a parent
-            return ! $tasks->contains('parent_id', $task->id);
-        })->sortBy('_lft')->values();
+        // OPTIMIZED: Get leaf tasks from cache (already loaded in with() method at line 1042)
+        // This eliminates O(n²) manual filtering
+        $leafTasks = $this->getCachedLeafTasks($this->selectedProjectId)
+            ->sortBy('_lft')
+            ->values();
 
-        // Get task IDs that have progress within the organization date range
-        $taskIdsWithProgress = TaskProgress::where('project_id', $this->selectedProjectId)
-            ->whereBetween('progress_date', [$startDate, $endDate])
-            ->distinct()
+        // OPTIMIZED: Get task IDs that have progress from already-loaded cache (loaded at line 1043)
+        // This eliminates the database query entirely
+        $taskIdsWithProgress = $this->getCachedLatestProgress()
             ->pluck('task_id')
+            ->unique()
             ->toArray();
 
         // Filter leaf tasks without progress and group by root task
@@ -1246,7 +1285,7 @@ new class extends Component
             if (! in_array($task->id, $taskIdsWithProgress)) {
                 // Find root task using preloaded tasks
                 $rootTask = $task;
-                $parentChain = [$task->name];
+                $parentChain = [];
 
                 while ($rootTask->parent_id) {
                     $rootTask = $tasks[$rootTask->parent_id] ?? null;
@@ -1262,7 +1301,7 @@ new class extends Component
                     $tasksWithoutProgress[$rootTaskName] = [];
                 }
 
-                // Build breadcrumb (reverse to show root -> leaf)
+                // Build breadcrumb (reverse to show root -> parent hierarchy, excluding the leaf task itself)
                 $breadcrumb = array_reverse($parentChain);
 
                 $tasksWithoutProgress[$rootTaskName][] = [
@@ -1522,11 +1561,11 @@ new class extends Component
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
                                 </svg>
                                 <span class="text-sm font-medium text-amber-800 dark:text-amber-200">
-                                    Project started {{ $sCurveData['delayDays'] }} day{{ $sCurveData['delayDays'] > 1 ? 's' : '' }} after planned date
+                                    Project terlambat {{ $sCurveData['delayDays'] }} hari 
                                 </span>
                             </div>
                             <p class="mt-1 text-xs text-amber-700 dark:text-amber-300">
-                                Planned: {{ $sCurveData['plannedStartDate'] }} • Actual: {{ $sCurveData['actualStartDate'] }}
+                                Rencana: {{ $sCurveData['plannedStartDate'] }} • Realisasi: {{ $sCurveData['actualStartDate'] }}
                             </p>
                         </div>
                     @endif
@@ -1563,7 +1602,7 @@ new class extends Component
                                             labels: this.chartData.labels,
                                             datasets: [
                                                 {
-                                                    label: 'Planned',
+                                                    label: 'Rencana',
                                                     data: this.chartData.planned,
                                                     borderColor: '#3b82f6',
                                                     backgroundColor: 'rgba(59, 130, 246, 0.1)',
@@ -1574,7 +1613,7 @@ new class extends Component
                                                     pointHoverRadius: 6,
                                                 },
                                                 {
-                                                    label: 'Actual',
+                                                    label: 'Realisasi',
                                                     data: this.chartData.actual,
                                                     borderColor: '#10b981',
                                                     backgroundColor: 'rgba(16, 185, 129, 0.1)',
@@ -1654,9 +1693,9 @@ new class extends Component
         @if(!$selectedProjectId)
             @if(array_sum($progressDistribution) > 0)
                 <div class="rounded-xl border border-neutral-200 bg-white p-6 dark:border-neutral-700 dark:bg-neutral-900">
-                    <flux:heading size="lg" class="mb-4">Project Completion Distribution</flux:heading>
+                    <flux:heading size="lg" class="mb-4">Distribusi Penyelesaian Project</flux:heading>
                     <p class="mb-4 text-sm text-neutral-600 dark:text-neutral-400">
-                        Projects grouped by completion percentage
+                        Project dikelompokkan berdasarkan prosentase penyelesian pekerjaan. 
                     </p>
 
                     <div class="relative h-64">
@@ -1773,15 +1812,15 @@ new class extends Component
         @if(empty($selectedProjectId))
         <div class="rounded-xl border border-neutral-200 bg-white dark:border-neutral-700 dark:bg-neutral-900">
             <div class="border-b border-neutral-200 p-6 dark:border-neutral-700">
-                <flux:heading size="lg">Top 10 Projects with Best Actual Progress</flux:heading>
+                <flux:heading size="lg">Top 10 Project </flux:heading>
                 <p class="mt-1 text-sm text-neutral-600 dark:text-neutral-400">
-                    Ranked by weighted average progress of all tasks
+                    Diurutkan dari rerata progres dari semua pekerjaan.
                 </p>
             </div>
             <div class="p-6">
                 @if(empty($top10Projects))
                     <div class="py-12 text-center text-neutral-600 dark:text-neutral-400">
-                        No projects with progress data available.
+                        Tidak ada project dengan progres terealisasi.
                     </div>
                 @else
                     <div class="space-y-4">
@@ -1825,7 +1864,7 @@ new class extends Component
                                         <div class="space-y-2">
                                             <div class="flex items-center justify-between">
                                                 <span class="text-sm font-medium text-neutral-600 dark:text-neutral-400">
-                                                    Actual Progress
+                                                    Progres Terealisasi
                                                 </span>
                                                 <span class="text-lg font-bold
                                                     @if($projectData['progress'] >= 90) text-green-600 dark:text-green-400
@@ -1870,13 +1909,13 @@ new class extends Component
                                 </svg>
                             </div>
                             <div>
-                                <flux:heading size="lg" class="text-amber-900 dark:text-amber-100">Tasks Without Progress</flux:heading>
+                                <flux:heading size="lg" class="text-amber-900 dark:text-amber-100">Pekerjan Tanpa Progres</flux:heading>
                                 <p class="text-sm text-amber-700 dark:text-amber-300">
                                     @php
                                         $totalMissing = collect($tasksWithoutProgress)->flatten(1)->count();
                                         $totalWeight = collect($tasksWithoutProgress)->flatten(1)->sum('weight');
                                     @endphp
-                                    {{ $totalMissing }} leaf tasks ({{ number_format($totalWeight, 2) }}% of total weight) have no progress recorded
+                                    {{ $totalMissing }} Pekerjaan belum mempunyai progres.
                                 </p>
                             </div>
                         </div>
@@ -1888,7 +1927,7 @@ new class extends Component
                                     <h4 class="mb-3 font-semibold text-amber-900 dark:text-amber-100">
                                         {{ $rootTaskName }}
                                         <span class="text-sm font-normal text-amber-700 dark:text-amber-300">
-                                            ({{ count($tasks) }} tasks)
+                                            ({{ count($tasks) }} Pekerjaan)
                                         </span>
                                     </h4>
                                     <div class="space-y-2">
