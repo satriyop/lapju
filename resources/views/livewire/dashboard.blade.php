@@ -1395,567 +1395,641 @@ new class extends Component
     }
 }; ?>
 
-<div class="flex h-full w-full flex-1 flex-col gap-6">
-        <!-- Load Chart.js for S-Curve -->
-        <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<div class="flex h-full w-full flex-1 flex-col gap-6" x-data="{ showFilters: window.innerWidth >= 1024 }">
+    {{-- Custom Styles --}}
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
 
-        <!-- Header -->
-        <div class="flex items-center justify-between">
-            <flux:heading size="xl">Dashboard</flux:heading>
-            <div class="text-sm text-neutral-600 dark:text-neutral-400">
-                {{ now()->format('l, F j, Y') }}
+        .dashboard-page {
+            font-family: 'Plus Jakarta Sans', system-ui, sans-serif;
+        }
+
+        .dashboard-page .stat-card {
+            position: relative;
+            overflow: hidden;
+        }
+
+        .dashboard-page .stat-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: var(--stat-accent, theme('colors.blue.500'));
+        }
+
+        .dashboard-page .progress-ring-bg {
+            stroke: theme('colors.neutral.200');
+        }
+
+        .dark .dashboard-page .progress-ring-bg {
+            stroke: theme('colors.neutral.700');
+        }
+
+        .dashboard-page .animate-in {
+            animation: fadeSlideIn 0.4s ease-out forwards;
+        }
+
+        @keyframes fadeSlideIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .dashboard-page .project-card {
+            transition: all 0.2s ease;
+        }
+
+        .dashboard-page .project-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px -5px rgba(0, 0, 0, 0.1), 0 4px 10px -5px rgba(0, 0, 0, 0.04);
+        }
+
+        .dark .dashboard-page .project-card:hover {
+            box-shadow: 0 8px 25px -5px rgba(0, 0, 0, 0.4);
+        }
+    </style>
+
+    {{-- Load Chart.js --}}
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <div class="dashboard-page">
+        {{-- Header --}}
+        <div class="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+                <h1 class="text-2xl font-extrabold tracking-tight text-neutral-900 dark:text-white sm:text-3xl">
+                    Dashboard
+                </h1>
+                <p class="mt-1 text-sm text-neutral-500 dark:text-neutral-400">
+                    {{ now()->translatedFormat('l, j F Y') }}
+                </p>
+            </div>
+
+            <div class="flex items-center gap-3">
+                {{-- Filter Toggle --}}
+                <button
+                    @click="showFilters = !showFilters"
+                    class="flex items-center gap-2 rounded-lg border border-neutral-300 bg-white px-4 py-2.5 text-sm font-medium text-neutral-700 shadow-sm transition hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
+                >
+                    <flux:icon.funnel class="h-4 w-4" />
+                    <span x-text="showFilters ? 'Hide Filters' : 'Show Filters'"></span>
+                    <flux:icon.chevron-down class="h-4 w-4 transition-transform" x-bind:class="showFilters ? 'rotate-180' : ''" />
+                </button>
             </div>
         </div>
 
-        <!-- Filters -->
-        <div class="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-            @if(!auth()->user()->hasRole('Reporter'))
-                <!-- Kodam Filter -->
-                <flux:select wire:model.live="selectedKodamId" label="Kodam" :disabled="$filtersLocked">
-                    <option value="">All Kodam</option>
-                    @foreach($kodams as $kodam)
-                        <option value="{{ $kodam->id }}">
-                            {{ $kodam->name }}
-                        </option>
-                    @endforeach
-                </flux:select>
-
-                <!-- Korem Filter (enabled only if Kodam is selected) -->
-                <flux:select wire:model.live="selectedKoremId" label="Korem" :disabled="$filtersLocked || !$this->selectedKodamId">
-                    <option value="">{{ $this->selectedKodamId ? 'Select Korem...' : 'Select Kodam first' }}</option>
-                    @foreach($korems as $korem)
-                        <option value="{{ $korem->id }}">
-                            {{ $korem->name }}
-                        </option>
-                    @endforeach
-                </flux:select>
-
-                <!-- Kodim Filter (enabled only if Korem is selected) -->
-                <flux:select wire:model.live="selectedKodimId" label="Kodim" :disabled="$filtersLocked || !$this->selectedKoremId">
-                    <option value="">{{ $this->selectedKoremId ? 'Select Kodim...' : 'Select Korem first' }}</option>
-                    @foreach($kodims as $kodim)
-                        <option value="{{ $kodim->id }}">
-                            {{ $kodim->name }} ({{ $kodim->projects_count }})
-                        </option>
-                    @endforeach
-                </flux:select>
-
-                <!-- Koramil Filter (enabled only if Kodim is selected) -->
-                <flux:select wire:model.live="selectedKoramilId" label="Koramil" :disabled="!$this->selectedKodimId">
-                    <option value="">{{ $this->selectedKodimId ? 'All Koramil' : 'Select Kodim first' }}</option>
-                    @foreach($koramils as $koramil)
-                        <option value="{{ $koramil->id }}">
-                            {{ $koramil->name }} ({{ $koramil->projects_count }})
-                        </option>
-                    @endforeach
-                </flux:select>
-
-                <!-- Location Filter -->
-                <flux:select wire:model.live="selectedLocationId" label="Location">
-                    <option value="">All Locations</option>
-                    @foreach($locations as $location)
-                        <option value="{{ $location->id }}">
-                            {{ $location->village_name }} - {{ $location->district_name }}
-                        </option>
-                    @endforeach
-                </flux:select>
-            @endif
-
-            <!-- Project Filter -->
-            <flux:select wire:model.live="selectedProjectId" label="Project">
-                <option value="">Select a project...</option>
-                @foreach($projects as $project)
-                    <option value="{{ $project->id }}">
-                        {{ $project->name }} - {{ $project->location->city_name }}
-                    </option>
-                @endforeach
-            </flux:select>
-        </div>
-
-        @if($stats && empty($selectedProjectId))
-            <!-- Aggregated Statistics Cards (Only shown when viewing all projects) -->
-            <!-- Row 2: Resource Metrics -->
-            <div class="grid gap-4 md:grid-cols-4">
-                <div class="rounded-xl border border-neutral-200 bg-white p-6 dark:border-neutral-700 dark:bg-neutral-900">
-                    <div class="text-sm font-medium text-neutral-600 dark:text-neutral-400">Projects</div>
-                    <div class="mt-2 text-3xl font-bold text-neutral-900 dark:text-neutral-100">
-                        {{ number_format($stats['total_projects']) }}
-                    </div>
-                    <div class="mt-1 text-xs text-neutral-500">Total projects in system</div>
+        {{-- Filters Panel --}}
+        <div
+            x-show="showFilters"
+            x-collapse
+            class="mb-6"
+        >
+            <div class="rounded-xl border border-neutral-200 bg-white p-4 shadow-sm dark:border-neutral-700 dark:bg-neutral-800/50">
+                <div class="mb-4 flex items-center gap-2">
+                    <flux:icon.adjustments-horizontal class="h-5 w-5 text-neutral-500" />
+                    <span class="text-sm font-semibold text-neutral-700 dark:text-neutral-300">Filter Data</span>
                 </div>
 
-                <div class="rounded-xl border border-neutral-200 bg-white p-6 dark:border-neutral-700 dark:bg-neutral-900">
-                    <div class="text-sm font-medium text-neutral-600 dark:text-neutral-400">Active Projects</div>
-                    <div class="mt-2 text-3xl font-bold text-blue-600 dark:text-blue-400">
-                        {{ number_format($stats['active_projects']) }}
-                    </div>
-                    <div class="mt-1 text-xs text-neutral-500">Projects with progress</div>
-                </div>
+                <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+                    @if(!auth()->user()->hasRole('Reporter'))
+                        {{-- Kodam --}}
+                        <div>
+                            <flux:select wire:model.live="selectedKodamId" label="Kodam" :disabled="$filtersLocked" size="sm">
+                                <option value="">Semua Kodam</option>
+                                @foreach($kodams as $kodam)
+                                    <option value="{{ $kodam->id }}">{{ $kodam->name }}</option>
+                                @endforeach
+                            </flux:select>
+                        </div>
 
-                <div class="rounded-xl border border-neutral-200 bg-white p-6 dark:border-neutral-700 dark:bg-neutral-900">
-                    <div class="text-sm font-medium text-neutral-600 dark:text-neutral-400">Locations</div>
-                    <div class="mt-2 text-3xl font-bold text-green-600 dark:text-green-400">
-                        {{ number_format($stats['total_locations']) }}
-                    </div>
-                    <div class="mt-1 text-xs text-neutral-500">Available project locations</div>
-                </div>
+                        {{-- Korem --}}
+                        <div>
+                            <flux:select wire:model.live="selectedKoremId" label="Korem" :disabled="$filtersLocked || !$this->selectedKodamId" size="sm">
+                                <option value="">{{ $this->selectedKodamId ? 'Pilih Korem...' : 'Pilih Kodam dulu' }}</option>
+                                @foreach($korems as $korem)
+                                    <option value="{{ $korem->id }}">{{ $korem->name }}</option>
+                                @endforeach
+                            </flux:select>
+                        </div>
 
-                <div class="rounded-xl border border-neutral-200 bg-white p-6 dark:border-neutral-700 dark:bg-neutral-900">
-                    <div class="text-sm font-medium text-neutral-600 dark:text-neutral-400">Reporters</div>
-                    <div class="mt-2 text-3xl font-bold text-purple-600 dark:text-purple-400">
-                        {{ number_format($stats['total_reporters']) }}
-                    </div>
-                    <div class="mt-1 text-xs text-neutral-500">Users with reporter role</div>
-                </div>
-            </div>
+                        {{-- Kodim --}}
+                        <div>
+                            <flux:select wire:model.live="selectedKodimId" label="Kodim" :disabled="$filtersLocked || !$this->selectedKoremId" size="sm">
+                                <option value="">{{ $this->selectedKoremId ? 'Pilih Kodim...' : 'Pilih Korem dulu' }}</option>
+                                @foreach($kodims as $kodim)
+                                    <option value="{{ $kodim->id }}">{{ $kodim->name }} ({{ $kodim->projects_count }})</option>
+                                @endforeach
+                            </flux:select>
+                        </div>
 
-            <!-- Row 1: Performance Metrics -->
-            <div class="grid gap-4 md:grid-cols-4">
-                <div class="rounded-xl border border-neutral-200 bg-white p-6 dark:border-neutral-700 dark:bg-neutral-900">
-                    <div class="text-sm font-medium text-neutral-600 dark:text-neutral-400">Overall Progress</div>
-                    <div class="mt-2 text-3xl font-bold text-blue-600 dark:text-blue-400">
-                        {{ number_format($aggregatedOverallProgress, 1) }}%
-                    </div>
-                    <div class="mt-1 text-xs text-neutral-500">Average across all projects</div>
-                </div>
+                        {{-- Koramil --}}
+                        <div>
+                            <flux:select wire:model.live="selectedKoramilId" label="Koramil" :disabled="!$this->selectedKodimId" size="sm">
+                                <option value="">{{ $this->selectedKodimId ? 'Semua Koramil' : 'Pilih Kodim dulu' }}</option>
+                                @foreach($koramils as $koramil)
+                                    <option value="{{ $koramil->id }}">{{ $koramil->name }} ({{ $koramil->projects_count }})</option>
+                                @endforeach
+                            </flux:select>
+                        </div>
 
-                <div class="rounded-xl border border-neutral-200 bg-white p-6 dark:border-neutral-700 dark:bg-neutral-900">
-                    <div class="text-sm font-medium text-neutral-600 dark:text-neutral-400">On Track</div>
-                    <div class="mt-2 text-3xl font-bold text-green-600 dark:text-green-400">
-                        {{ number_format($projectsOnTrackCount) }}
-                    </div>
-                    <div class="mt-1 text-xs text-neutral-500">Projects meeting targets</div>
-                </div>
-
-                <div class="rounded-xl border border-neutral-200 bg-white p-6 dark:border-neutral-700 dark:bg-neutral-900">
-                    <div class="text-sm font-medium text-neutral-600 dark:text-neutral-400">Behind Schedule</div>
-                    <div class="mt-2 text-3xl font-bold text-red-600 dark:text-red-400">
-                        {{ number_format($projectsBehindCount) }}
-                    </div>
-                    <div class="mt-1 text-xs text-neutral-500">Projects below targets</div>
-                </div>
-
-                <div class="rounded-xl border border-neutral-200 bg-white p-6 dark:border-neutral-700 dark:bg-neutral-900">
-                    <div class="text-sm font-medium text-neutral-600 dark:text-neutral-400">Avg Delay</div>
-                    <div class="mt-2 text-3xl font-bold text-amber-600 dark:text-amber-400">
-                        {{ number_format($averageDelayDays) }}
-                    </div>
-                    <div class="mt-1 text-xs text-neutral-500">Days behind schedule</div>
-                </div>
-            </div>
-
-
-        @endif
-
-        <!-- S-Curve Chart (Single Project Only) -->
-        @if($selectedProjectId && !empty($sCurveData['labels']))
-                <div class="rounded-xl border border-neutral-200 bg-white p-6 dark:border-neutral-700 dark:bg-neutral-900" wire:key="scurve-{{ $selectedProjectId }}-{{ md5(json_encode($sCurveData)) }}">
-                    <div class="mb-4">
-                        <flux:heading size="lg">S-Curve Progress</flux:heading>
-                    </div>
-
-                    @if($sCurveData && isset($sCurveData['delayDays']) && $sCurveData['delayDays'] > 0)
-                        <div class="mb-4 rounded-lg border border-amber-300 bg-amber-50 p-3 dark:border-amber-700 dark:bg-amber-900/20">
-                            <div class="flex items-center gap-2">
-                                <svg class="h-5 w-5 flex-shrink-0 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
-                                </svg>
-                                <span class="text-sm font-medium text-amber-800 dark:text-amber-200">
-                                    Project terlambat {{ $sCurveData['delayDays'] }} hari 
-                                </span>
-                            </div>
-                            <p class="mt-1 text-xs text-amber-700 dark:text-amber-300">
-                                Rencana: {{ $sCurveData['plannedStartDate'] }} • Realisasi: {{ $sCurveData['actualStartDate'] }}
-                            </p>
+                        {{-- Location --}}
+                        <div>
+                            <flux:select wire:model.live="selectedLocationId" label="Lokasi" size="sm">
+                                <option value="">Semua Lokasi</option>
+                                @foreach($locations as $location)
+                                    <option value="{{ $location->id }}">{{ $location->village_name }} - {{ $location->district_name }}</option>
+                                @endforeach
+                            </flux:select>
                         </div>
                     @endif
 
-                    <div class="relative h-80">
-                        <canvas
-                            x-data="{
-                                chart: null,
-                                chartData: @js($sCurveData),
-                                init() {
-                                    this.waitForChartJs();
-                                },
-                                waitForChartJs() {
-                                    if (typeof Chart !== 'undefined') {
-                                        this.renderChart();
-                                    } else {
-                                        setTimeout(() => this.waitForChartJs(), 50);
-                                    }
-                                },
-                                renderChart() {
-                                    if (typeof Chart === 'undefined') return;
-
-                                    if (this.chart) {
-                                        this.chart.destroy();
-                                    }
-
-                                    const isDark = document.documentElement.classList.contains('dark');
-                                    const gridColor = isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)';
-                                    const textColor = isDark ? '#d1d5db' : '#374151';
-
-                                    this.chart = new Chart(this.$el, {
-                                        type: 'line',
-                                        data: {
-                                            labels: this.chartData.labels,
-                                            datasets: [
-                                                {
-                                                    label: 'Rencana',
-                                                    data: this.chartData.planned,
-                                                    borderColor: '#3b82f6',
-                                                    backgroundColor: 'rgba(59, 130, 246, 0.1)',
-                                                    borderWidth: 3,
-                                                    fill: false,
-                                                    tension: 0.4,
-                                                    pointRadius: 4,
-                                                    pointHoverRadius: 6,
-                                                },
-                                                {
-                                                    label: 'Realisasi',
-                                                    data: this.chartData.actual,
-                                                    borderColor: '#10b981',
-                                                    backgroundColor: 'rgba(16, 185, 129, 0.1)',
-                                                    borderWidth: 3,
-                                                    fill: false,
-                                                    tension: 0.4,
-                                                    pointRadius: 4,
-                                                    pointHoverRadius: 6,
-                                                }
-                                            ]
-                                        },
-                                        options: {
-                                            responsive: true,
-                                            maintainAspectRatio: false,
-                                            interaction: {
-                                                intersect: false,
-                                                mode: 'index',
-                                            },
-                                            plugins: {
-                                                legend: {
-                                                    position: 'top',
-                                                    labels: {
-                                                        color: textColor,
-                                                        usePointStyle: true,
-                                                        padding: 20,
-                                                    }
-                                                },
-                                                tooltip: {
-                                                    backgroundColor: isDark ? '#1f2937' : '#ffffff',
-                                                    titleColor: textColor,
-                                                    bodyColor: textColor,
-                                                    borderColor: isDark ? '#374151' : '#e5e7eb',
-                                                    borderWidth: 1,
-                                                    callbacks: {
-                                                        label: function(context) {
-                                                            return context.dataset.label + ': ' + context.parsed.y.toFixed(2) + '%';
-                                                        }
-                                                    }
-                                                }
-                                            },
-                                            scales: {
-                                                x: {
-                                                    grid: {
-                                                        color: gridColor,
-                                                    },
-                                                    ticks: {
-                                                        color: textColor,
-                                                        maxRotation: 45,
-                                                        minRotation: 0,
-                                                    }
-                                                },
-                                                y: {
-                                                    min: 0,
-                                                    max: 100,
-                                                    grid: {
-                                                        color: gridColor,
-                                                    },
-                                                    ticks: {
-                                                        color: textColor,
-                                                        callback: function(value) {
-                                                            return value + '%';
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    });
-                                }
-                            }"
-                            wire:ignore
-                        ></canvas>
+                    {{-- Project --}}
+                    <div class="{{ auth()->user()->hasRole('Reporter') ? 'sm:col-span-2' : '' }}">
+                        <flux:select wire:model.live="selectedProjectId" label="Project" size="sm">
+                            <option value="">Pilih project untuk detail...</option>
+                            @foreach($projects as $project)
+                                <option value="{{ $project->id }}">{{ $project->name }} - {{ $project->location->city_name ?? '-' }}</option>
+                            @endforeach
+                        </flux:select>
                     </div>
                 </div>
-        @endif
-
-        <!-- Progress Distribution Chart (Aggregated Mode Only) -->
-        @if(!$selectedProjectId)
-            @if(array_sum($progressDistribution) > 0)
-                <div class="rounded-xl border border-neutral-200 bg-white p-6 dark:border-neutral-700 dark:bg-neutral-900">
-                    <flux:heading size="lg" class="mb-4">Distribusi Penyelesaian Project</flux:heading>
-                    <p class="mb-4 text-sm text-neutral-600 dark:text-neutral-400">
-                        Project dikelompokkan berdasarkan prosentase penyelesian pekerjaan. 
-                    </p>
-
-                    <div class="relative h-64">
-                        <canvas
-                            x-data="{
-                                chart: null,
-                                distributionData: @js($progressDistribution),
-                                init() {
-                                    this.waitForChartJs();
-                                },
-                                waitForChartJs() {
-                                    if (typeof Chart !== 'undefined') {
-                                        this.renderChart();
-                                    } else {
-                                        setTimeout(() => this.waitForChartJs(), 50);
-                                    }
-                                },
-                                renderChart() {
-                                    if (typeof Chart === 'undefined') return;
-
-                                    if (this.chart) {
-                                        this.chart.destroy();
-                                    }
-
-                                    const isDark = document.documentElement.classList.contains('dark');
-                                    const gridColor = isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)';
-                                    const textColor = isDark ? '#d1d5db' : '#374151';
-
-                                    this.chart = new Chart(this.$el, {
-                                        type: 'bar',
-                                        data: {
-                                            labels: ['0-25%', '25-50%', '50-75%', '75-100%'],
-                                            datasets: [{
-                                                label: 'Number of Projects',
-                                                data: [
-                                                    this.distributionData['0-25'],
-                                                    this.distributionData['25-50'],
-                                                    this.distributionData['50-75'],
-                                                    this.distributionData['75-100']
-                                                ],
-                                                backgroundColor: [
-                                                    'rgba(239, 68, 68, 0.8)',    // Red
-                                                    'rgba(251, 191, 36, 0.8)',   // Yellow
-                                                    'rgba(59, 130, 246, 0.8)',   // Blue
-                                                    'rgba(34, 197, 94, 0.8)'     // Green
-                                                ],
-                                                borderColor: [
-                                                    'rgb(239, 68, 68)',
-                                                    'rgb(251, 191, 36)',
-                                                    'rgb(59, 130, 246)',
-                                                    'rgb(34, 197, 94)'
-                                                ],
-                                                borderWidth: 2,
-                                                borderRadius: 6
-                                            }]
-                                        },
-                                        options: {
-                                            responsive: true,
-                                            maintainAspectRatio: false,
-                                            plugins: {
-                                                legend: {
-                                                    display: false
-                                                },
-                                                tooltip: {
-                                                    callbacks: {
-                                                        label: function(context) {
-                                                            return context.parsed.y + ' project' + (context.parsed.y !== 1 ? 's' : '');
-                                                        }
-                                                    }
-                                                }
-                                            },
-                                            scales: {
-                                                y: {
-                                                    beginAtZero: true,
-                                                    ticks: {
-                                                        stepSize: 1,
-                                                        color: textColor
-                                                    },
-                                                    grid: {
-                                                        color: gridColor
-                                                    },
-                                                    title: {
-                                                        display: true,
-                                                        text: 'Number of Projects',
-                                                        color: textColor
-                                                    }
-                                                },
-                                                x: {
-                                                    ticks: {
-                                                        color: textColor
-                                                    },
-                                                    grid: {
-                                                        display: false
-                                                    },
-                                                    title: {
-                                                        display: true,
-                                                        text: 'Completion Range',
-                                                        color: textColor
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    });
-                                }
-                            }"
-                            wire:ignore
-                        ></canvas>
-                    </div>
-                </div>
-            @endif
-        @endif
-
-        <!-- Top 10 Projects with Best Actual Progress (Only shown when viewing all projects) -->
-        @if(empty($selectedProjectId))
-        <div class="rounded-xl border border-neutral-200 bg-white dark:border-neutral-700 dark:bg-neutral-900">
-            <div class="border-b border-neutral-200 p-6 dark:border-neutral-700">
-                <flux:heading size="lg">Top 10 Project </flux:heading>
-                <p class="mt-1 text-sm text-neutral-600 dark:text-neutral-400">
-                    Diurutkan dari rerata progres dari semua pekerjaan.
-                </p>
             </div>
-            <div class="p-6">
-                @if(empty($top10Projects))
-                    <div class="py-12 text-center text-neutral-600 dark:text-neutral-400">
-                        Tidak ada project dengan progres terealisasi.
+        </div>
+
+        @if($stats && empty($selectedProjectId))
+            {{-- Hero Stats Section - Aggregated View --}}
+            <div class="mb-6 grid grid-cols-2 gap-4 lg:grid-cols-4">
+                {{-- Overall Progress --}}
+                <div class="stat-card col-span-2 flex items-center gap-4 rounded-xl border border-neutral-200 bg-white p-5 shadow-sm dark:border-neutral-700 dark:bg-neutral-800" style="--stat-accent: theme('colors.blue.500')">
+                    <div class="relative h-20 w-20 flex-shrink-0">
+                        <svg class="h-20 w-20 -rotate-90 transform" viewBox="0 0 36 36">
+                            <path
+                                class="progress-ring-bg"
+                                stroke-width="3"
+                                fill="none"
+                                d="M18 2.0845
+                                    a 15.9155 15.9155 0 0 1 0 31.831
+                                    a 15.9155 15.9155 0 0 1 0 -31.831"
+                            />
+                            <path
+                                stroke="currentColor"
+                                stroke-width="3"
+                                stroke-linecap="round"
+                                fill="none"
+                                class="text-blue-500"
+                                stroke-dasharray="{{ $aggregatedOverallProgress }}, 100"
+                                d="M18 2.0845
+                                    a 15.9155 15.9155 0 0 1 0 31.831
+                                    a 15.9155 15.9155 0 0 1 0 -31.831"
+                            />
+                        </svg>
+                        <div class="absolute inset-0 flex items-center justify-center">
+                            <span class="text-lg font-bold text-neutral-900 dark:text-white">{{ number_format($aggregatedOverallProgress, 0) }}%</span>
+                        </div>
                     </div>
-                @else
-                    <div class="space-y-4">
+                    <div>
+                        <p class="text-sm font-medium text-neutral-500 dark:text-neutral-400">Progres Keseluruhan</p>
+                        <p class="text-2xl font-bold text-neutral-900 dark:text-white">{{ number_format($aggregatedOverallProgress, 1) }}%</p>
+                        <p class="mt-1 text-xs text-neutral-500">Rata-rata dari {{ $stats['total_projects'] }} project</p>
+                    </div>
+                </div>
+
+                {{-- Projects On Track --}}
+                <div class="stat-card rounded-xl border border-neutral-200 bg-white p-5 shadow-sm dark:border-neutral-700 dark:bg-neutral-800" style="--stat-accent: theme('colors.emerald.500')">
+                    <div class="flex items-center justify-between">
+                        <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-emerald-100 dark:bg-emerald-900/30">
+                            <flux:icon.check-circle class="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
+                        </div>
+                        <span class="text-2xl font-bold text-emerald-600 dark:text-emerald-400">{{ $projectsOnTrackCount }}</span>
+                    </div>
+                    <p class="mt-3 text-sm font-medium text-neutral-700 dark:text-neutral-300">Sesuai Target</p>
+                    <p class="mt-0.5 text-xs text-neutral-500">Project memenuhi target</p>
+                </div>
+
+                {{-- Projects Behind --}}
+                <div class="stat-card rounded-xl border border-neutral-200 bg-white p-5 shadow-sm dark:border-neutral-700 dark:bg-neutral-800" style="--stat-accent: theme('colors.rose.500')">
+                    <div class="flex items-center justify-between">
+                        <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-rose-100 dark:bg-rose-900/30">
+                            <flux:icon.exclamation-triangle class="h-5 w-5 text-rose-600 dark:text-rose-400" />
+                        </div>
+                        <span class="text-2xl font-bold text-rose-600 dark:text-rose-400">{{ $projectsBehindCount }}</span>
+                    </div>
+                    <p class="mt-3 text-sm font-medium text-neutral-700 dark:text-neutral-300">Terlambat</p>
+                    <p class="mt-0.5 text-xs text-neutral-500">Project di bawah target</p>
+                </div>
+            </div>
+
+            {{-- Secondary Stats Row --}}
+            <div class="mb-6 grid grid-cols-2 gap-4 sm:grid-cols-4">
+                <div class="rounded-xl border border-neutral-200 bg-white p-4 dark:border-neutral-700 dark:bg-neutral-800">
+                    <div class="flex items-center gap-3">
+                        <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-100 dark:bg-blue-900/30">
+                            <flux:icon.folder class="h-4 w-4 text-blue-600 dark:text-blue-400" />
+                        </div>
+                        <div>
+                            <p class="text-xl font-bold text-neutral-900 dark:text-white">{{ number_format($stats['total_projects']) }}</p>
+                            <p class="text-xs text-neutral-500">Total Project</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="rounded-xl border border-neutral-200 bg-white p-4 dark:border-neutral-700 dark:bg-neutral-800">
+                    <div class="flex items-center gap-3">
+                        <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-cyan-100 dark:bg-cyan-900/30">
+                            <flux:icon.play class="h-4 w-4 text-cyan-600 dark:text-cyan-400" />
+                        </div>
+                        <div>
+                            <p class="text-xl font-bold text-neutral-900 dark:text-white">{{ number_format($stats['active_projects']) }}</p>
+                            <p class="text-xs text-neutral-500">Project Aktif</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="rounded-xl border border-neutral-200 bg-white p-4 dark:border-neutral-700 dark:bg-neutral-800">
+                    <div class="flex items-center gap-3">
+                        <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-100 dark:bg-amber-900/30">
+                            <flux:icon.clock class="h-4 w-4 text-amber-600 dark:text-amber-400" />
+                        </div>
+                        <div>
+                            <p class="text-xl font-bold text-neutral-900 dark:text-white">{{ number_format($averageDelayDays) }}</p>
+                            <p class="text-xs text-neutral-500">Hari Keterlambatan</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="rounded-xl border border-neutral-200 bg-white p-4 dark:border-neutral-700 dark:bg-neutral-800">
+                    <div class="flex items-center gap-3">
+                        <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-purple-100 dark:bg-purple-900/30">
+                            <flux:icon.users class="h-4 w-4 text-purple-600 dark:text-purple-400" />
+                        </div>
+                        <div>
+                            <p class="text-xl font-bold text-neutral-900 dark:text-white">{{ number_format($stats['total_reporters']) }}</p>
+                            <p class="text-xs text-neutral-500">Reporter</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            {{-- Charts Section --}}
+            <div class="mb-6 grid gap-6 lg:grid-cols-2">
+                {{-- Progress Distribution Chart --}}
+                @if(array_sum($progressDistribution) > 0)
+                    <div class="rounded-xl border border-neutral-200 bg-white p-5 shadow-sm dark:border-neutral-700 dark:bg-neutral-800">
+                        <div class="mb-4">
+                            <h3 class="text-base font-semibold text-neutral-900 dark:text-white">Distribusi Progres</h3>
+                            <p class="text-xs text-neutral-500">Project berdasarkan persentase penyelesaian</p>
+                        </div>
+
+                        <div class="relative h-56">
+                            <canvas
+                                x-data="{
+                                    chart: null,
+                                    distributionData: @js($progressDistribution),
+                                    init() {
+                                        this.waitForChartJs();
+                                    },
+                                    waitForChartJs() {
+                                        if (typeof Chart !== 'undefined') {
+                                            this.renderChart();
+                                        } else {
+                                            setTimeout(() => this.waitForChartJs(), 50);
+                                        }
+                                    },
+                                    renderChart() {
+                                        if (typeof Chart === 'undefined') return;
+
+                                        if (this.chart) {
+                                            this.chart.destroy();
+                                        }
+
+                                        const isDark = document.documentElement.classList.contains('dark');
+                                        const textColor = isDark ? '#a1a1aa' : '#52525b';
+
+                                        this.chart = new Chart(this.$el, {
+                                            type: 'doughnut',
+                                            data: {
+                                                labels: ['0-25%', '25-50%', '50-75%', '75-100%'],
+                                                datasets: [{
+                                                    data: [
+                                                        this.distributionData['0-25'],
+                                                        this.distributionData['25-50'],
+                                                        this.distributionData['50-75'],
+                                                        this.distributionData['75-100']
+                                                    ],
+                                                    backgroundColor: [
+                                                        '#f43f5e',
+                                                        '#f59e0b',
+                                                        '#3b82f6',
+                                                        '#10b981'
+                                                    ],
+                                                    borderWidth: 0,
+                                                    borderRadius: 4
+                                                }]
+                                            },
+                                            options: {
+                                                responsive: true,
+                                                maintainAspectRatio: false,
+                                                cutout: '65%',
+                                                plugins: {
+                                                    legend: {
+                                                        position: 'right',
+                                                        labels: {
+                                                            color: textColor,
+                                                            usePointStyle: true,
+                                                            pointStyle: 'circle',
+                                                            padding: 15,
+                                                            font: { size: 12 }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        });
+                                    }
+                                }"
+                                wire:ignore
+                            ></canvas>
+                        </div>
+                    </div>
+                @endif
+
+                {{-- Quick Stats Cards --}}
+                <div class="grid grid-cols-2 gap-4">
+                    @php
+                        $distColors = [
+                            '0-25' => ['bg' => 'bg-rose-50 dark:bg-rose-900/20', 'text' => 'text-rose-600 dark:text-rose-400', 'label' => '0-25%'],
+                            '25-50' => ['bg' => 'bg-amber-50 dark:bg-amber-900/20', 'text' => 'text-amber-600 dark:text-amber-400', 'label' => '25-50%'],
+                            '50-75' => ['bg' => 'bg-blue-50 dark:bg-blue-900/20', 'text' => 'text-blue-600 dark:text-blue-400', 'label' => '50-75%'],
+                            '75-100' => ['bg' => 'bg-emerald-50 dark:bg-emerald-900/20', 'text' => 'text-emerald-600 dark:text-emerald-400', 'label' => '75-100%'],
+                        ];
+                    @endphp
+                    @foreach($progressDistribution as $range => $count)
+                        <div class="rounded-xl border border-neutral-200 {{ $distColors[$range]['bg'] }} p-4 dark:border-neutral-700">
+                            <p class="text-3xl font-bold {{ $distColors[$range]['text'] }}">{{ $count }}</p>
+                            <p class="mt-1 text-sm font-medium text-neutral-600 dark:text-neutral-400">{{ $distColors[$range]['label'] }}</p>
+                            <p class="text-xs text-neutral-500">project</p>
+                        </div>
+                    @endforeach
+                </div>
+            </div>
+
+            {{-- Top 10 Projects --}}
+            @if(!empty($top10Projects))
+                <div class="rounded-xl border border-neutral-200 bg-white shadow-sm dark:border-neutral-700 dark:bg-neutral-800">
+                    <div class="border-b border-neutral-200 p-5 dark:border-neutral-700">
+                        <h3 class="text-base font-semibold text-neutral-900 dark:text-white">Top 10 Project</h3>
+                        <p class="text-xs text-neutral-500">Diurutkan berdasarkan progres tertinggi</p>
+                    </div>
+
+                    <div class="divide-y divide-neutral-100 dark:divide-neutral-700">
                         @foreach($top10Projects as $index => $projectData)
-                            <div class="rounded-lg border border-neutral-200 bg-neutral-50 p-4 dark:border-neutral-700 dark:bg-neutral-800">
-                                <div class="flex items-start gap-4">
-                                    <!-- Rank Badge -->
-                                    <div class="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-full
-                                        @if($index === 0) bg-yellow-100 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300
-                                        @elseif($index === 1) bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300
-                                        @elseif($index === 2) bg-orange-100 text-orange-700 dark:bg-orange-900 dark:text-orange-300
-                                        @else bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300
-                                        @endif">
-                                        <span class="text-xl font-bold">{{ $index + 1 }}</span>
+                            <div class="project-card flex items-center gap-4 p-4 hover:bg-neutral-50 dark:hover:bg-neutral-700/50">
+                                {{-- Rank --}}
+                                <div class="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full font-bold
+                                    @if($index === 0) bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-400
+                                    @elseif($index === 1) bg-neutral-200 text-neutral-600 dark:bg-neutral-600 dark:text-neutral-300
+                                    @elseif($index === 2) bg-orange-100 text-orange-700 dark:bg-orange-900/50 dark:text-orange-400
+                                    @else bg-neutral-100 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400
+                                    @endif">
+                                    {{ $index + 1 }}
+                                </div>
+
+                                {{-- Project Info --}}
+                                <div class="min-w-0 flex-1">
+                                    <p class="truncate font-medium text-neutral-900 dark:text-white">{{ $projectData['name'] }}</p>
+                                    <div class="mt-1 flex flex-wrap items-center gap-2 text-xs text-neutral-500">
+                                        <span>{{ $projectData['location_village'] }}, {{ $projectData['location_district'] }}</span>
+                                        @if($projectData['kodim_name'])
+                                            <flux:badge size="sm" color="zinc">{{ $projectData['kodim_name'] }}</flux:badge>
+                                        @endif
                                     </div>
+                                </div>
 
-                                    <!-- Project Info -->
-                                    <div class="flex-1">
-                                        <div class="mb-2">
-                                            <h4 class="font-semibold text-neutral-900 dark:text-neutral-100">
-                                                {{ $projectData['name'] }}
-                                            </h4>
-                                            <div class="mt-1 flex flex-wrap items-center gap-2">
-                                                <span class="text-sm text-neutral-600 dark:text-neutral-400">
-                                                    {{ $projectData['location_village'] }}, {{ $projectData['location_district'] }}
-                                                </span>
-                                                @if($projectData['kodim_name'])
-                                                    <flux:badge size="sm" color="blue" class="font-medium">
-                                                        {{ $projectData['kodim_name'] }}
-                                                    </flux:badge>
-                                                @endif
-                                                @if($projectData['office_name'])
-                                                    <flux:badge size="sm" color="green" class="font-medium">                                                
-                                                        {{ $projectData['office_name'] }}
-                                                    </flux:badge>
-                                                @endif
-                                            </div>
-                                        </div>
-
-                                        <!-- Progress Bar -->
-                                        <div class="space-y-2">
-                                            <div class="flex items-center justify-between">
-                                                <span class="text-sm font-medium text-neutral-600 dark:text-neutral-400">
-                                                    Progres Terealisasi
-                                                </span>
-                                                <span class="text-lg font-bold
-                                                    @if($projectData['progress'] >= 90) text-green-600 dark:text-green-400
-                                                    @elseif($projectData['progress'] >= 70) text-blue-600 dark:text-blue-400
-                                                    @elseif($projectData['progress'] >= 50) text-yellow-600 dark:text-yellow-400
-                                                    @else text-red-600 dark:text-red-400
-                                                    @endif">
-                                                    {{ number_format($projectData['progress'], 2) }}%
-                                                </span>
-                                            </div>
-                                            <div class="h-3 w-full overflow-hidden rounded-full bg-neutral-200 dark:bg-neutral-700">
-                                                <div
-                                                    class="h-full rounded-full transition-all
-                                                        @if($projectData['progress'] >= 90) bg-green-500
-                                                        @elseif($projectData['progress'] >= 70) bg-blue-500
-                                                        @elseif($projectData['progress'] >= 50) bg-yellow-500
-                                                        @else bg-red-500
-                                                        @endif"
-                                                    style="width: {{ min($projectData['progress'], 100) }}%"
-                                                ></div>
-                                            </div>
-                                        </div>
+                                {{-- Progress --}}
+                                <div class="flex-shrink-0 text-right">
+                                    <p class="text-lg font-bold
+                                        @if($projectData['progress'] >= 75) text-emerald-600 dark:text-emerald-400
+                                        @elseif($projectData['progress'] >= 50) text-blue-600 dark:text-blue-400
+                                        @elseif($projectData['progress'] >= 25) text-amber-600 dark:text-amber-400
+                                        @else text-rose-600 dark:text-rose-400
+                                        @endif">
+                                        {{ number_format($projectData['progress'], 1) }}%
+                                    </p>
+                                    <div class="mt-1 h-1.5 w-20 overflow-hidden rounded-full bg-neutral-200 dark:bg-neutral-700">
+                                        <div
+                                            class="h-full rounded-full transition-all
+                                                @if($projectData['progress'] >= 75) bg-emerald-500
+                                                @elseif($projectData['progress'] >= 50) bg-blue-500
+                                                @elseif($projectData['progress'] >= 25) bg-amber-500
+                                                @else bg-rose-500
+                                                @endif"
+                                            style="width: {{ min($projectData['progress'], 100) }}%"
+                                        ></div>
                                     </div>
                                 </div>
                             </div>
                         @endforeach
                     </div>
-                @endif
-            </div>
-        </div>
-        @endif
-
-        @if($selectedProjectId)
-            <!-- Tasks Without Progress -->
-            @if(!empty($tasksWithoutProgress))
-                <div class="rounded-xl border border-amber-200 bg-amber-50 dark:border-amber-900 dark:bg-amber-950">
-                    <div class="border-b border-amber-200 p-6 dark:border-amber-800">
-                        <div class="flex items-center gap-3">
-                            <div class="flex h-10 w-10 items-center justify-center rounded-full bg-amber-100 dark:bg-amber-900">
-                                <svg class="h-6 w-6 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
-                                </svg>
-                            </div>
-                            <div>
-                                <flux:heading size="lg" class="text-amber-900 dark:text-amber-100">Pekerjan Tanpa Progres</flux:heading>
-                                <p class="text-sm text-amber-700 dark:text-amber-300">
-                                    @php
-                                        $totalMissing = collect($tasksWithoutProgress)->flatten(1)->count();
-                                        $totalWeight = collect($tasksWithoutProgress)->flatten(1)->sum('weight');
-                                    @endphp
-                                    {{ $totalMissing }} Pekerjaan belum mempunyai progres.
-                                </p>
-                            </div>
-                        </div>
+                </div>
+            @else
+                {{-- Empty State --}}
+                <div class="flex flex-col items-center justify-center rounded-xl border border-dashed border-neutral-300 bg-neutral-50 py-16 dark:border-neutral-600 dark:bg-neutral-800/50">
+                    <div class="flex h-16 w-16 items-center justify-center rounded-full bg-neutral-200 dark:bg-neutral-700">
+                        <flux:icon.chart-bar class="h-8 w-8 text-neutral-400" />
                     </div>
-                    <div class="max-h-96 overflow-y-auto p-6">
-                        <div class="space-y-4">
-                            @foreach($tasksWithoutProgress as $rootTaskName => $tasks)
-                                <div class="rounded-lg border border-amber-200 bg-white p-4 dark:border-amber-800 dark:bg-amber-900/30">
-                                    <h4 class="mb-3 font-semibold text-amber-900 dark:text-amber-100">
-                                        {{ $rootTaskName }}
-                                        <span class="text-sm font-normal text-amber-700 dark:text-amber-300">
-                                            ({{ count($tasks) }} Pekerjaan)
-                                        </span>
-                                    </h4>
-                                    <div class="space-y-2">
-                                        @foreach($tasks as $task)
-                                            <div class="rounded border border-amber-100 bg-amber-50 p-2 dark:border-amber-700 dark:bg-amber-900/50">
-                                                <div class="flex items-start justify-between">
-                                                    <div class="flex-1">
-                                                        <div class="text-sm font-medium text-amber-900 dark:text-amber-100">
-                                                            {{ $task['name'] }}
-                                                        </div>
-                                                        <div class="mt-1 text-xs text-amber-600 dark:text-amber-400">
-                                                            {{ $task['breadcrumb'] }}
-                                                        </div>
-                                                    </div>
-                                                    <div class="ml-2 text-right">
-                                                        <span class="text-sm font-medium text-amber-700 dark:text-amber-300">
-                                                            {{ number_format($task['weight'], 2) }}%
-                                                        </span>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        @endforeach
-                                    </div>
-                                </div>
-                            @endforeach
-                        </div>
-                    </div>
+                    <h3 class="mt-4 text-lg font-semibold text-neutral-700 dark:text-neutral-300">Belum Ada Data Progres</h3>
+                    <p class="mt-1 max-w-sm text-center text-sm text-neutral-500">
+                        Project yang dipilih belum memiliki data progres. Mulai tambahkan progres untuk melihat statistik.
+                    </p>
                 </div>
             @endif
         @endif
+
+        {{-- Single Project View --}}
+        @if($selectedProjectId && !empty($sCurveData['labels']))
+            {{-- S-Curve Chart --}}
+            <div class="mb-6 rounded-xl border border-neutral-200 bg-white p-5 shadow-sm dark:border-neutral-700 dark:bg-neutral-800" wire:key="scurve-{{ $selectedProjectId }}-{{ md5(json_encode($sCurveData)) }}">
+                <div class="mb-4 flex items-center justify-between">
+                    <div>
+                        <h3 class="text-base font-semibold text-neutral-900 dark:text-white">Kurva S Progress</h3>
+                        <p class="text-xs text-neutral-500">Perbandingan rencana vs realisasi</p>
+                    </div>
+
+                    @if($sCurveData && isset($sCurveData['delayDays']) && $sCurveData['delayDays'] > 0)
+                        <div class="flex items-center gap-2 rounded-lg bg-amber-50 px-3 py-1.5 dark:bg-amber-900/30">
+                            <flux:icon.exclamation-triangle class="h-4 w-4 text-amber-600 dark:text-amber-400" />
+                            <span class="text-sm font-medium text-amber-700 dark:text-amber-300">
+                                Terlambat {{ $sCurveData['delayDays'] }} hari
+                            </span>
+                        </div>
+                    @endif
+                </div>
+
+                <div class="relative h-72">
+                    <canvas
+                        x-data="{
+                            chart: null,
+                            chartData: @js($sCurveData),
+                            init() {
+                                this.waitForChartJs();
+                            },
+                            waitForChartJs() {
+                                if (typeof Chart !== 'undefined') {
+                                    this.renderChart();
+                                } else {
+                                    setTimeout(() => this.waitForChartJs(), 50);
+                                }
+                            },
+                            renderChart() {
+                                if (typeof Chart === 'undefined') return;
+
+                                if (this.chart) {
+                                    this.chart.destroy();
+                                }
+
+                                const isDark = document.documentElement.classList.contains('dark');
+                                const gridColor = isDark ? 'rgba(255, 255, 255, 0.06)' : 'rgba(0, 0, 0, 0.06)';
+                                const textColor = isDark ? '#a1a1aa' : '#52525b';
+
+                                this.chart = new Chart(this.$el, {
+                                    type: 'line',
+                                    data: {
+                                        labels: this.chartData.labels,
+                                        datasets: [
+                                            {
+                                                label: 'Rencana',
+                                                data: this.chartData.planned,
+                                                borderColor: '#3b82f6',
+                                                backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                                                borderWidth: 2,
+                                                fill: true,
+                                                tension: 0.4,
+                                                pointRadius: 0,
+                                                pointHoverRadius: 6,
+                                            },
+                                            {
+                                                label: 'Realisasi',
+                                                data: this.chartData.actual,
+                                                borderColor: '#10b981',
+                                                backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                                                borderWidth: 2,
+                                                fill: true,
+                                                tension: 0.4,
+                                                pointRadius: 0,
+                                                pointHoverRadius: 6,
+                                            }
+                                        ]
+                                    },
+                                    options: {
+                                        responsive: true,
+                                        maintainAspectRatio: false,
+                                        interaction: {
+                                            intersect: false,
+                                            mode: 'index',
+                                        },
+                                        plugins: {
+                                            legend: {
+                                                position: 'top',
+                                                align: 'end',
+                                                labels: {
+                                                    color: textColor,
+                                                    usePointStyle: true,
+                                                    pointStyle: 'circle',
+                                                    padding: 20,
+                                                    font: { size: 12 }
+                                                }
+                                            },
+                                            tooltip: {
+                                                backgroundColor: isDark ? '#27272a' : '#ffffff',
+                                                titleColor: textColor,
+                                                bodyColor: textColor,
+                                                borderColor: isDark ? '#3f3f46' : '#e4e4e7',
+                                                borderWidth: 1,
+                                                padding: 12,
+                                                cornerRadius: 8,
+                                                callbacks: {
+                                                    label: function(context) {
+                                                        return context.dataset.label + ': ' + context.parsed.y.toFixed(1) + '%';
+                                                    }
+                                                }
+                                            }
+                                        },
+                                        scales: {
+                                            x: {
+                                                grid: { color: gridColor },
+                                                ticks: {
+                                                    color: textColor,
+                                                    maxRotation: 45,
+                                                    font: { size: 10 }
+                                                }
+                                            },
+                                            y: {
+                                                min: 0,
+                                                max: 100,
+                                                grid: { color: gridColor },
+                                                ticks: {
+                                                    color: textColor,
+                                                    font: { size: 10 },
+                                                    callback: function(value) {
+                                                        return value + '%';
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                });
+                            }
+                        }"
+                        wire:ignore
+                    ></canvas>
+                </div>
+            </div>
+        @endif
+
+        {{-- Tasks Without Progress --}}
+        @if($selectedProjectId && !empty($tasksWithoutProgress))
+            <div class="rounded-xl border border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-900/20">
+                <div class="border-b border-amber-200 p-5 dark:border-amber-800">
+                    <div class="flex items-center gap-3">
+                        <div class="flex h-10 w-10 items-center justify-center rounded-full bg-amber-100 dark:bg-amber-800">
+                            <flux:icon.exclamation-triangle class="h-5 w-5 text-amber-600 dark:text-amber-400" />
+                        </div>
+                        <div>
+                            <h3 class="font-semibold text-amber-900 dark:text-amber-100">Pekerjaan Tanpa Progres</h3>
+                            @php
+                                $totalMissing = collect($tasksWithoutProgress)->flatten(1)->count();
+                            @endphp
+                            <p class="text-sm text-amber-700 dark:text-amber-300">{{ $totalMissing }} pekerjaan belum memiliki data progres</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="max-h-80 overflow-y-auto p-5">
+                    <div class="space-y-4">
+                        @foreach($tasksWithoutProgress as $rootTaskName => $tasks)
+                            <div class="rounded-lg border border-amber-200 bg-white p-4 dark:border-amber-700 dark:bg-amber-900/30">
+                                <h4 class="mb-2 font-medium text-amber-900 dark:text-amber-100">
+                                    {{ $rootTaskName }}
+                                    <span class="ml-2 text-sm font-normal text-amber-600 dark:text-amber-400">({{ count($tasks) }} item)</span>
+                                </h4>
+                                <div class="space-y-1.5">
+                                    @foreach($tasks as $task)
+                                        <div class="flex items-center justify-between rounded bg-amber-50 px-3 py-1.5 text-sm dark:bg-amber-900/20">
+                                            <span class="text-amber-800 dark:text-amber-200">{{ $task['name'] }}</span>
+                                            <span class="text-xs text-amber-600 dark:text-amber-400">{{ number_format($task['weight'], 2) }}%</span>
+                                        </div>
+                                    @endforeach
+                                </div>
+                            </div>
+                        @endforeach
+                    </div>
+                </div>
+            </div>
+        @endif
+    </div>
 </div>
