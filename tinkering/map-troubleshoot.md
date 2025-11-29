@@ -398,3 +398,17 @@ Run with: `bash check-map.sh`
 
   And one critical check - can you open Elements tab in DevTools and look at the #map element structure? Check if .leaflet-tile-pane has any visible tiles or if they're
   positioned somewhere off-screen.
+
+
+   This is a Leaflet CSS issue - the Leaflet CSS that controls the map view positioning is not being applied correctly. The bundled CSS might be loading after Leaflet
+  initializes, or there's a CSS conflict.
+
+  Let me check something:
+
+  // Check the map view container
+  const mapPane = document.querySelector('.leaflet-map-pane');
+  console.log('Map pane transform:', window.getComputedStyle(mapPane).transform);
+
+  // Check leaflet container computed height
+  const container = document.querySelector('.leaflet-container');
+  console.log('Container computed height:', window.getComputedStyle(container).height);

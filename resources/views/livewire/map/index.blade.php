@@ -622,8 +622,8 @@ new class extends Component
             </div>
 
             {{-- Map Area --}}
-            <div class="relative h-full flex-1 overflow-hidden" wire:ignore>
-                <div id="map" class="absolute inset-0"></div>
+            <div class="relative flex-1 overflow-hidden" wire:ignore>
+                <div id="map" class="h-[calc(100vh-140px)] w-full"></div>
 
                 {{-- Coordinates --}}
                 <div class="absolute bottom-4 left-4 z-[1000] rounded-lg border border-neutral-200 bg-white/95 px-3 py-2 shadow-sm backdrop-blur-sm">
