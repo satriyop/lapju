@@ -5,6 +5,7 @@ use App\Models\Project;
 use App\Models\Task;
 use App\Models\TaskProgress;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 use Livewire\Volt\Component;
 
 use function Livewire\Volt\layout;
@@ -66,6 +67,7 @@ new class extends Component
 
     /**
      * Get daily progress data with changes
+     * OPTIMIZED: Batch load previous progress to avoid N+1 queries
      */
     private function getReportData()
     {
@@ -87,6 +89,33 @@ new class extends Component
             ->orderBy('task_id')
             ->get();
 
+        if ($progressRecords->isEmpty()) {
+            return [
+                'project' => $project,
+                'daily_data' => [],
+                'total_updates' => 0,
+            ];
+        }
+
+        // OPTIMIZED: Batch load ALL previous progress for ALL tasks in ONE query
+        // Get the latest progress BEFORE each date for each task
+        $taskIds = $progressRecords->pluck('task_id')->unique()->toArray();
+
+        // Get all progress records before the date range for these tasks
+        $allPreviousProgress = TaskProgress::where('project_id', $this->projectId)
+            ->whereIn('task_id', $taskIds)
+            ->where('progress_date', '<', $this->endDate)
+            ->orderBy('progress_date', 'desc')
+            ->get()
+            ->groupBy('task_id');
+
+        // Build a lookup: task_id => [date => percentage]
+        // For each task, get all historical progress keyed by date
+        $progressLookup = [];
+        foreach ($allPreviousProgress as $taskId => $records) {
+            $progressLookup[$taskId] = $records->keyBy(fn ($r) => $r->progress_date->format('Y-m-d'));
+        }
+
         // Group by date
         $dailyData = [];
 
@@ -99,14 +128,19 @@ new class extends Component
                 $dailyData[$date] = [];
             }
 
-            // Get previous progress for this task (to calculate change)
-            $previousProgress = TaskProgress::where('task_id', $progress->task_id)
-                ->where('project_id', $this->projectId)
-                ->where('progress_date', '<', $date)
-                ->orderBy('progress_date', 'desc')
-                ->first();
+            // OPTIMIZED: Find previous progress from preloaded data (no query!)
+            $previousPercentage = 0;
+            if (isset($progressLookup[$progress->task_id])) {
+                // Find the latest progress before this date
+                $taskProgress = $progressLookup[$progress->task_id];
+                foreach ($taskProgress as $progressDate => $prevProgress) {
+                    if ($progressDate < $date) {
+                        $previousPercentage = $prevProgress->percentage;
+                        break; // Already sorted desc, so first match is the latest
+                    }
+                }
+            }
 
-            $previousPercentage = $previousProgress ? $previousProgress->percentage : 0;
             $dailyChange = $progress->percentage - $previousPercentage;
 
             $dailyData[$date][] = [

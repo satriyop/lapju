@@ -467,8 +467,8 @@ new class extends Component
                         </svg>
                     </div>
                     <div>
-                        <h1 class="text-lg font-semibold text-neutral-900">Project Map</h1>
-                        <p class="text-sm text-neutral-500">Geographic distribution overview</p>
+                        <h1 class="text-lg font-semibold text-neutral-900">Peta Wilayah</h1>
+                        <p class="text-sm text-neutral-500">Distribusi Pembangunan Koperasi Merah Putih</p>
                     </div>
                 </div>
 
@@ -518,7 +518,7 @@ new class extends Component
                                 wire:model.live="selectedKodimId"
                                 class="w-full rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-sm text-neutral-700 focus:border-blue-500 focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500"
                             >
-                                <option value="">All Kodim</option>
+                                <option value="">Seluruh Kodim</option>
                                 @foreach($kodims as $kodim)
                                     <option value="{{ $kodim->id }}">{{ $kodim->name }}</option>
                                 @endforeach
@@ -531,7 +531,7 @@ new class extends Component
                                 class="w-full rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-sm text-neutral-700 focus:border-blue-500 focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:opacity-50"
                                 @if(!$selectedKodimId) disabled @endif
                             >
-                                <option value="">All Koramil</option>
+                                <option value="">Seluruh Koramil</option>
                                 @foreach($koramils as $koramil)
                                     <option value="{{ $koramil->id }}">{{ $koramil->name }}</option>
                                 @endforeach
@@ -544,7 +544,7 @@ new class extends Component
                             wire:model.live="statusFilter"
                             class="w-full rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-sm text-neutral-700 focus:border-blue-500 focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500"
                         >
-                            <option value="all">All Status</option>
+                            <option value="all">Semua Status</option>
                             <option value="planning">Planning</option>
                             <option value="active">Active</option>
                             <option value="completed">Completed</option>
@@ -613,8 +613,8 @@ new class extends Component
                                         <path stroke-linecap="round" stroke-linejoin="round" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
                                     </svg>
                                 </div>
-                                <p class="mt-3 text-sm font-medium text-neutral-600">No projects found</p>
-                                <p class="text-xs text-neutral-400">Try adjusting your filters</p>
+                                <p class="mt-3 text-sm font-medium text-neutral-600">Tidak Ditemukan Project</p>
+                                <p class="text-xs text-neutral-400">Coba Ubah Filter</p>
                             </div>
                         @endforelse
                     </div>

@@ -8,6 +8,7 @@ use App\Models\Task;
 use App\Models\TaskProgress;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 use Livewire\Volt\Component;
 
 use function Livewire\Volt\layout;
@@ -149,11 +150,13 @@ new class extends Component
 
     /**
      * Get report data - projects with progress info
+     * OPTIMIZED: Uses efficient subqueries instead of loading all records into memory
      */
     private function getReportData(): array
     {
         $currentUser = Auth::user();
         $reportDate = Carbon::parse($this->reportDate);
+        $reportDateStr = $reportDate->format('Y-m-d');
 
         // Build project query based on filters
         $query = Project::with([
@@ -187,79 +190,89 @@ new class extends Component
         }
 
         $projects = $query->orderBy('name')->get();
-
-        // Prepare report data
-        $reportData = [];
         $projectIds = $projects->pluck('id')->toArray();
 
         if (empty($projectIds)) {
             return [];
         }
 
-        // Get all leaf task IDs for these projects
+        // OPTIMIZED: Get all leaf tasks with keyed collection for O(1) lookups
         $leafTasksByProject = Task::whereIn('project_id', $projectIds)
-            ->whereRaw('_lft = _rgt - 1')
+            ->whereRaw('_rgt = _lft + 1')
             ->get()
             ->groupBy('project_id');
 
-        // Get latest progress for each project (total to date) and before report date (for "yesterday")
-        $latestProgressByProject = [];
-        $beforeReportProgressByProject = [];
-        foreach ($projectIds as $projectId) {
-            // Latest progress up to and including report date (for TOTAL column)
-            $latestProgress = TaskProgress::where('project_id', $projectId)
-                ->where('progress_date', '<=', $reportDate->format('Y-m-d'))
-                ->orderBy('progress_date', 'desc')
-                ->get()
-                ->unique('task_id');
-            $latestProgressByProject[$projectId] = $latestProgress;
+        // OPTIMIZED: Get ONLY latest progress per task using subquery (not all records!)
+        // This reduces thousands of records to just one per task
+        $latestProgressIds = DB::table('task_progress')
+            ->select(DB::raw('MAX(id) as id'))
+            ->whereIn('project_id', $projectIds)
+            ->where('progress_date', '<=', $reportDateStr)
+            ->groupBy('task_id', 'project_id')
+            ->pluck('id');
 
-            // Latest progress BEFORE report date (for KMRN/Yesterday column)
-            $beforeProgress = TaskProgress::where('project_id', $projectId)
-                ->where('progress_date', '<', $reportDate->format('Y-m-d'))
-                ->orderBy('progress_date', 'desc')
-                ->get()
-                ->unique('task_id');
-            $beforeReportProgressByProject[$projectId] = $beforeProgress;
-        }
+        $latestProgressByProject = TaskProgress::whereIn('id', $latestProgressIds)
+            ->get()
+            ->groupBy('project_id');
 
-        // Get photos for each project with root task relationship
+        // OPTIMIZED: Get ONLY latest progress BEFORE report date per task
+        $beforeProgressIds = DB::table('task_progress')
+            ->select(DB::raw('MAX(id) as id'))
+            ->whereIn('project_id', $projectIds)
+            ->where('progress_date', '<', $reportDateStr)
+            ->groupBy('task_id', 'project_id')
+            ->pluck('id');
+
+        $beforeProgressByProject = TaskProgress::whereIn('id', $beforeProgressIds)
+            ->get()
+            ->groupBy('project_id');
+
+        // OPTIMIZED: Load only photos around report date (not ALL photos)
+        $photoStartDate = $reportDate->copy()->subDays(30)->format('Y-m-d');
         $photosByProject = ProgressPhoto::whereIn('project_id', $projectIds)
-            ->with('rootTask')
+            ->where('photo_date', '>=', $photoStartDate)
+            ->where('photo_date', '<=', $reportDateStr)
+            ->with('rootTask:id,name')
             ->orderBy('photo_date', 'desc')
             ->get()
             ->groupBy('project_id');
 
+        $reportData = [];
+
         foreach ($projects as $index => $project) {
             $leafTasks = $leafTasksByProject[$project->id] ?? collect();
+            // OPTIMIZED: Use keyBy for O(1) lookups instead of O(n) firstWhere
+            $leafTasksKeyed = $leafTasks->keyBy('id');
             $leafTaskIds = $leafTasks->pluck('id')->toArray();
             $totalWeight = $leafTasks->sum('weight') ?: 1;
 
             // Calculate total progress to date (TOTAL column)
             $latestProgress = $latestProgressByProject[$project->id] ?? collect();
             $totalProgress = 0;
+            $latestActivity = '-';
+
             foreach ($latestProgress as $progress) {
-                if (in_array($progress->task_id, $leafTaskIds)) {
-                    $task = $leafTasks->firstWhere('id', $progress->task_id);
-                    if ($task) {
-                        $totalProgress += ($progress->percentage * $task->weight) / $totalWeight;
-                    }
+                if (isset($leafTasksKeyed[$progress->task_id])) {
+                    $task = $leafTasksKeyed[$progress->task_id];
+                    $totalProgress += ($progress->percentage * $task->weight) / $totalWeight;
                 }
             }
 
-            // Calculate yesterday's progress (KMRN column) - latest progress BEFORE report date
-            $beforeReportProgress = $beforeReportProgressByProject[$project->id] ?? collect();
+            // Get latest activity from most recent progress
+            $latestActivity = $latestProgress->first()?->notes ?? '-';
+
+            // Calculate yesterday's progress (KMRN column)
+            $beforeProgress = $beforeProgressByProject[$project->id] ?? collect();
             $yesterdayTotal = 0;
-            foreach ($beforeReportProgress as $progress) {
-                if (in_array($progress->task_id, $leafTaskIds)) {
-                    $task = $leafTasks->firstWhere('id', $progress->task_id);
-                    if ($task) {
-                        $yesterdayTotal += ($progress->percentage * $task->weight) / $totalWeight;
-                    }
+
+            foreach ($beforeProgress as $progress) {
+                if (isset($leafTasksKeyed[$progress->task_id])) {
+                    $task = $leafTasksKeyed[$progress->task_id];
+                    $yesterdayTotal += ($progress->percentage * $task->weight) / $totalWeight;
                 }
             }
 
-            // Calculate today's change (HR INI column) - difference between total and yesterday
+            // Calculate today's change (HR INI column)
             $todayChange = $totalProgress - $yesterdayTotal;
 
             // Get photos - filter by report date
@@ -267,17 +280,14 @@ new class extends Component
 
             // SEBELUM: All photos from latest date BEFORE report date
             $beforePhotos = $projectPhotos
-                ->filter(fn ($p) => $p->photo_date->format('Y-m-d') < $reportDate->format('Y-m-d'))
+                ->filter(fn ($p) => $p->photo_date->format('Y-m-d') < $reportDateStr)
                 ->groupBy(fn ($p) => $p->photo_date->format('Y-m-d'))
                 ->sortKeysDesc()
                 ->first() ?? collect();
 
             // SAAT INI: All photos exactly ON report date
             $currentPhotos = $projectPhotos
-                ->filter(fn ($p) => $p->photo_date->format('Y-m-d') === $reportDate->format('Y-m-d'));
-
-            // Get latest activity description from most recent progress entry
-            $latestActivity = $latestProgress->first()?->notes ?? '-';
+                ->filter(fn ($p) => $p->photo_date->format('Y-m-d') === $reportDateStr);
 
             $reportData[] = [
                 'index' => $index + 1,
